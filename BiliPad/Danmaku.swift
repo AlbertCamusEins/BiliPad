@@ -49,15 +49,13 @@ private final class DanmakuXMLParser: NSObject, XMLParserDelegate {
 }
 
 struct DanmakuOverlay: View {
-    let player: AVPlayer
+    let currentTime: Double
     let items: [DanmakuItem]
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { _ in
-            GeometryReader { geometry in
-                let current = player.currentTime().seconds
-                ForEach(activeItems(at: current)) { item in
-                    let elapsed = max(0, current - item.time)
+        GeometryReader { geometry in
+            ForEach(activeItems(at: currentTime)) { item in
+                    let elapsed = max(0, currentTime - item.time)
                     let progress = elapsed / 8.0
                     Text(item.text)
                         .font(.system(size: 17, weight: .semibold))
@@ -65,7 +63,6 @@ struct DanmakuOverlay: View {
                         .shadow(color: .black, radius: 1.5)
                         .lineLimit(1)
                         .position(x: geometry.size.width * (1.12 - progress * 1.35), y: 28 + CGFloat(item.id % 8) * 28)
-                }
             }
         }.allowsHitTesting(false).clipped()
     }

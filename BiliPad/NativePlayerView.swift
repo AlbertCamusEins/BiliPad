@@ -16,10 +16,25 @@ final class NativePlayerViewModel: ObservableObject {
     @Published private(set) var isLoading = true
     @Published private(set) var error: String?
     @Published private(set) var danmaku: [DanmakuItem] = []
+    @Published private(set) var currentTime: Double = 0
     private(set) var finalItem: AVPlayerItem?
+    private var loadedRequestID: String?
+    private var timeObserver: Any?
+
+    init() {
+        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600), queue: .main) { [weak self] time in
+            Task { @MainActor [weak self] in
+                self?.currentTime = time.seconds.isFinite ? time.seconds : 0
+                self?.isPlaying = self?.player.timeControlStatus == .playing
+            }
+        }
+    }
 
     func load(_ request: PlaybackRequest, cookie: String) async {
+        guard loadedRequestID != request.id else { return }
+        loadedRequestID = request.id
         isLoading = true
+        currentTime = 0
         error = nil
         do {
             async let streamRequest = BiliAPIClient().playURLs(bvid: request.bvid, cid: request.cid, cookie: cookie)
@@ -35,6 +50,7 @@ final class NativePlayerViewModel: ObservableObject {
             player.play()
             isPlaying = true
         } catch {
+            loadedRequestID = nil
             self.error = error.localizedDescription
         }
         isLoading = false
@@ -54,7 +70,10 @@ final class NativePlayerViewModel: ObservableObject {
         }
     }
 
-    func stop() { player.pause() }
+    func reset() {
+        player.pause(); player.removeAllItems(); loadedRequestID = nil; finalItem = nil
+        currentTime = 0; isPlaying = false; danmaku = []
+    }
 }
 
 struct NativePlayerView: View {
@@ -64,14 +83,14 @@ struct NativePlayerView: View {
     let commandID: Int
     let danmakuEnabled: Bool
     let onEnded: () -> Void
-    @StateObject private var model = NativePlayerViewModel()
+    @ObservedObject var model: NativePlayerViewModel
     @State private var showsChrome = true
 
     var body: some View {
         ZStack {
             Color.black
             PlayerCanvas(player: model.player).allowsHitTesting(false)
-            if danmakuEnabled { DanmakuOverlay(player: model.player, items: model.danmaku) }
+            if danmakuEnabled { DanmakuOverlay(currentTime: model.currentTime, items: model.danmaku) }
 
             if showsChrome {
                 LinearGradient(colors: [.black.opacity(0.7), .clear, .black.opacity(0.78)], startPoint: .top, endPoint: .bottom)
@@ -115,7 +134,6 @@ struct NativePlayerView: View {
             guard let ended = notification.object as? AVPlayerItem, ended === model.finalItem else { return }
             onEnded()
         }
-        .onDisappear { model.stop() }
     }
 
     private var progress: Double {

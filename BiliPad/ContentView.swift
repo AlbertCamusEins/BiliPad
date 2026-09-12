@@ -15,6 +15,7 @@ struct ContentView: View {
     @StateObject private var bindings: ControllerBindings
     @StateObject private var controller: ControllerManager
     @StateObject private var session = SessionStore()
+    @StateObject private var playerModel = NativePlayerViewModel()
     @State private var selectedTab: ContentTab = .recommended
     @State private var items: [VideoSummary] = []
     @State private var focusedIndex = 0
@@ -285,8 +286,10 @@ struct ContentView: View {
             ZStack {
                 Color(red: 0.035, green: 0.037, blue: 0.05).ignoresSafeArea()
                 if playerFullscreen {
-                    NativePlayerView(request: request, cookie: session.cookieHeader, command: playerCommand, commandID: playerCommandID, danmakuEnabled: danmakuEnabled, onEnded: advanceAutoplay)
-                        .frame(width: geometry.size.width, height: geometry.size.height).ignoresSafeArea()
+                    NativePlayerView(request: request, cookie: session.cookieHeader, command: playerCommand, commandID: playerCommandID, danmakuEnabled: danmakuEnabled, onEnded: advanceAutoplay, model: playerModel)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                        .ignoresSafeArea()
                 } else {
                     let totalWidth = min(geometry.size.width - 32, 1120)
                     let videoWidth = totalWidth * 0.66
@@ -294,7 +297,7 @@ struct ContentView: View {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 16) {
                             HStack(alignment: .top, spacing: 14) {
-                                NativePlayerView(request: request, cookie: session.cookieHeader, command: playerCommand, commandID: playerCommandID, danmakuEnabled: danmakuEnabled, onEnded: advanceAutoplay)
+                                NativePlayerView(request: request, cookie: session.cookieHeader, command: playerCommand, commandID: playerCommandID, danmakuEnabled: danmakuEnabled, onEnded: advanceAutoplay, model: playerModel)
                                     .frame(width: videoWidth, height: videoWidth * 9.0 / 16.0)
                                     .clipShape(RoundedRectangle(cornerRadius: 10))
                                     .overlay { RoundedRectangle(cornerRadius: 10).stroke(detailFocusZone == 0 ? Color.pink : .clear, lineWidth: 3) }
@@ -324,7 +327,7 @@ struct ContentView: View {
                     }
                 }
             }
-        }.transition(.opacity)
+        }.ignoresSafeArea(playerFullscreen ? .all : []).transition(.opacity)
     }
 
     private var sidePanel: some View {
@@ -489,10 +492,10 @@ struct ContentView: View {
         case .refresh: Task { await loadCurrentTab(); showToast("已刷新\(selectedTab.title)") }
         case .left: focusedIndex = max(0, focusedIndex - 1)
         case .right: focusedIndex = min(max(0, count - 1), focusedIndex + 1)
-        case .up:
+        case .up, .stickUp:
             if selectedTab == .recommended && focusedIndex < stride { searchFocused = true }
             else { focusedIndex = max(0, focusedIndex - stride) }
-        case .down:
+        case .down, .stickDown:
             if searchFocused { searchFocused = false }
             else { focusedIndex = min(max(0, count - 1), focusedIndex + stride) }
         case .confirm:
@@ -515,7 +518,7 @@ struct ContentView: View {
             else if detailFocusZone == 2 { performFocusedInteraction() }
         case .back:
             if playerFullscreen { playerFullscreen = false }
-            else { playback = nil; detail = nil; relatedVideos = []; replies = [] }
+            else { playerModel.reset(); playback = nil; detail = nil; relatedVideos = []; replies = [] }
         case .playPause: sendPlayer(.togglePlayback)
         case .fullscreen: playerFullscreen.toggle(); showToast(playerFullscreen ? "全屏" : "窗口模式")
         case .interaction: performLTInteraction()
@@ -523,28 +526,32 @@ struct ContentView: View {
             if ltFavorites { performLTInteraction(); showToast("LT 收藏模式：长按仍执行收藏") }
             else { performTriple() }
         case .toggleDanmaku: danmakuEnabled.toggle(); showToast(danmakuEnabled ? "弹幕已开启" : "弹幕已关闭")
-        case .up:
+        case .up, .stickUp:
             if playerFullscreen { sendPlayer(.volume(0.08)); showToast("音量 +") }
-            else if detailFocusZone == 1 { sideIndex = max(0, sideIndex - 1) }
-            else if detailFocusZone == 3 { commentIndex = max(0, commentIndex - 1) }
+            else if detailFocusZone == 1 {
+                if sideIndex > 0 { sideIndex -= 1 } else { detailFocusZone = 0 }
+            }
+            else if detailFocusZone == 3 {
+                if commentIndex > 0 { commentIndex -= 1 } else { detailFocusZone = 2 }
+            }
             else if detailFocusZone == 2 { detailFocusZone = 0 }
-        case .down:
+        case .down, .stickDown:
             if playerFullscreen { sendPlayer(.volume(-0.08)); showToast("音量 −") }
             else if detailFocusZone == 1 { sideIndex = min(max(0, sideVideos.count - 1), sideIndex + 1) }
             else if detailFocusZone == 3 { commentIndex = min(max(0, replies.count - 1), commentIndex + 1) }
             else if detailFocusZone == 0 { detailFocusZone = 2 }
             else if detailFocusZone == 2 { detailFocusZone = 3 }
         case .left:
-            if playerFullscreen { sendPlayer(.seek(-10)); showToast("快退 10 秒") }
+            if playerFullscreen, playerModel.isPlaying { sendPlayer(.seek(-10)); showToast("快退 10 秒") }
             else if detailFocusZone == 1 { detailFocusZone = 0 }
             else if detailFocusZone == 2 { actionIndex = max(0, actionIndex - 1) }
             else if detailFocusZone == 3 { detailFocusZone = 2 }
-            else { sendPlayer(.seek(-10)); showToast("快退 10 秒") }
+            else if detailFocusZone == 0, playerModel.isPlaying { sendPlayer(.seek(-10)); showToast("快退 10 秒") }
         case .right:
-            if playerFullscreen { sendPlayer(.seek(10)); showToast("快进 10 秒") }
+            if playerFullscreen, playerModel.isPlaying { sendPlayer(.seek(10)); showToast("快进 10 秒") }
             else if detailFocusZone == 0 { detailFocusZone = 1 }
             else if detailFocusZone == 2 { actionIndex = min(2, actionIndex + 1) }
-            else { sendPlayer(.seek(10)); showToast("快进 10 秒") }
+            else if detailFocusZone == 0, playerModel.isPlaying { sendPlayer(.seek(10)); showToast("快进 10 秒") }
         case .menu: settingsFocus = 0; showsSettings = true
         default: break
         }
@@ -552,8 +559,8 @@ struct ContentView: View {
 
     private func handleSettings(_ action: ControllerAction) {
         switch action {
-        case .up, .left: settingsFocus = max(0, settingsFocus - 1)
-        case .down, .right: settingsFocus = min(14, settingsFocus + 1)
+        case .up, .left, .stickUp: settingsFocus = max(0, settingsFocus - 1)
+        case .down, .right, .stickDown: settingsFocus = min(14, settingsFocus + 1)
         case .confirm: activateSetting()
         case .back, .menu: controller.cancelCapture(); remapTarget = nil; showsSettings = false
         default: break
@@ -600,8 +607,8 @@ struct ContentView: View {
         switch action {
         case .left: keyboardIndex = max(0, keyboardIndex - 1)
         case .right: keyboardIndex = min(keyboardKeys.count - 1, keyboardIndex + 1)
-        case .up: keyboardIndex = max(0, keyboardIndex - columns)
-        case .down: keyboardIndex = min(keyboardKeys.count - 1, keyboardIndex + columns)
+        case .up, .stickUp: keyboardIndex = max(0, keyboardIndex - columns)
+        case .down, .stickDown: keyboardIndex = min(keyboardKeys.count - 1, keyboardIndex + columns)
         case .confirm: activateKeyboardKey()
         case .back: keyboardVisible = false
         default: break
@@ -634,8 +641,8 @@ struct ContentView: View {
 
     private func handleDetail(_ action: ControllerAction, detail: VideoDetail) {
         switch action {
-        case .up: selectedPage = max(0, selectedPage - 1)
-        case .down: selectedPage = min(max(0, detail.pages.count - 1), selectedPage + 1)
+        case .up, .stickUp: selectedPage = max(0, selectedPage - 1)
+        case .down, .stickDown: selectedPage = min(max(0, detail.pages.count - 1), selectedPage + 1)
         case .confirm: if detail.pages.indices.contains(selectedPage) { play(detail, page: detail.pages[selectedPage]) }
         case .back: self.detail = nil
         case .menu: settingsFocus = 0; showsSettings = true
