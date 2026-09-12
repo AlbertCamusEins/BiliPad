@@ -63,6 +63,7 @@ jobs:
         run: |
           APP="$RUNNER_TEMP/BiliPadDerivedData/Build/Products/Release-iphoneos/BiliPad.app"
           OUTPUT="$RUNNER_TEMP/BiliPadArtifact"
+          find "$APP" -maxdepth 3 -type f -print | sort
           test -x "$APP/BiliPad"
           test -f "$APP/Info.plist"
           test -f "$APP/controller-bridge.js"
