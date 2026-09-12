@@ -26,6 +26,21 @@ struct BiliAPIClient: Sendable {
         try await get("/x/web-interface/nav", cookie: cookie)
     }
 
+    func history(cookie: String) async throws -> [VideoSummary] {
+        let value: HistoryData = try await get("/x/web-interface/history/cursor", query: ["max": "0", "view_at": "0", "business": "archive", "ps": "30"], cookie: cookie)
+        return value.list.compactMap(\.video)
+    }
+
+    func favoriteFolders(userID: Int64, cookie: String) async throws -> [FavoriteFolder] {
+        let value: FavoriteFolderData = try await get("/x/v3/fav/folder/created/list-all", query: ["up_mid": "\(userID)"], cookie: cookie)
+        return value.list
+    }
+
+    func favorites(folderID: Int64, cookie: String) async throws -> [VideoSummary] {
+        let value: FavoriteMediaData = try await get("/x/v3/fav/resource/list", query: ["media_id": "\(folderID)", "pn": "1", "ps": "20", "platform": "web"], cookie: cookie)
+        return (value.medias ?? []).compactMap(\.video)
+    }
+
     private func get<Value: Decodable & Sendable>(
         _ path: String,
         query: [String: String] = [:],

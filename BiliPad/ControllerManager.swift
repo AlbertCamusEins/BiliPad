@@ -13,6 +13,9 @@ enum ControllerAction: String, Sendable {
     case fullscreen
     case disableAutoplay
     case menu
+    case previousTab
+    case nextTab
+    case refresh
 }
 
 @MainActor
@@ -99,6 +102,9 @@ final class ControllerManager: ObservableObject {
         gamepad.buttonY.pressedChangedHandler = Self.buttonHandler(owner: self, action: .fullscreen)
         gamepad.buttonOptions?.pressedChangedHandler = Self.buttonHandler(owner: self, action: .disableAutoplay)
         gamepad.buttonMenu.pressedChangedHandler = Self.buttonHandler(owner: self, action: .menu)
+        gamepad.leftShoulder.pressedChangedHandler = Self.buttonHandler(owner: self, action: .previousTab)
+        gamepad.rightShoulder.pressedChangedHandler = Self.buttonHandler(owner: self, action: .nextTab)
+        gamepad.leftThumbstickButton?.pressedChangedHandler = Self.buttonHandler(owner: self, action: .refresh)
     }
 
     private nonisolated static func buttonHandler(
@@ -121,6 +127,9 @@ final class ControllerManager: ObservableObject {
         gamepad.buttonY.pressedChangedHandler = nil
         gamepad.buttonOptions?.pressedChangedHandler = nil
         gamepad.buttonMenu.pressedChangedHandler = nil
+        gamepad.leftShoulder.pressedChangedHandler = nil
+        gamepad.rightShoulder.pressedChangedHandler = nil
+        gamepad.leftThumbstickButton?.pressedChangedHandler = nil
     }
 
     private func updateDirectionalRepeat() {

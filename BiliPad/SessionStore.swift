@@ -6,6 +6,7 @@ final class SessionStore: ObservableObject {
     @Published private(set) var cookies: [String: String] = [:]
     @Published private(set) var userName: String?
     @Published private(set) var avatarURL: URL?
+    @Published private(set) var userID: Int64?
 
     private let service = "com.bilipad.session"
     private let account = "bilibili-cookies"
@@ -33,12 +34,14 @@ final class SessionStore: ObservableObject {
     func updateProfile(_ nav: NavData) {
         userName = nav.isLogin ? nav.uname : nil
         avatarURL = nav.isLogin ? nav.face.flatMap(URL.init(string:)) : nil
+        userID = nav.isLogin ? nav.mid : nil
     }
 
     func signOut() {
         cookies = [:]
         userName = nil
         avatarURL = nil
+        userID = nil
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

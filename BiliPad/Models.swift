@@ -27,6 +27,12 @@ struct VideoSummary: Decodable, Identifiable, Hashable, Sendable {
     var id: String { bvid }
 }
 
+extension VideoSummary {
+    init(bvid: String, title: String, pic: String, duration: Int, ownerName: String, ownerFace: String? = nil, view: Int? = nil, danmaku: Int? = nil) {
+        self.init(bvid: bvid, title: title, pic: pic, duration: duration, owner: VideoOwner(name: ownerName, face: ownerFace), stat: VideoStat(view: view, danmaku: danmaku))
+    }
+}
+
 struct PopularData: Decodable, Sendable {
     let list: [VideoSummary]
 }
@@ -47,6 +53,7 @@ struct VideoDetail: Decodable, Identifiable, Sendable {
     let desc: String
     let owner: VideoOwner
     let pages: [VideoPage]
+    let stat: VideoStat?
 
     var id: String { bvid }
 }
@@ -69,11 +76,90 @@ struct NavData: Decodable, Sendable {
     let isLogin: Bool
     let uname: String?
     let face: String?
+    let mid: Int64?
 
     enum CodingKeys: String, CodingKey {
         case isLogin = "isLogin"
-        case uname, face
+        case uname, face, mid
     }
+}
+
+struct HistoryData: Decodable, Sendable {
+    let list: [HistoryEntry]
+}
+
+struct HistoryEntry: Decodable, Sendable {
+    let title: String
+    let cover: String
+    let duration: Int
+    let authorName: String
+    let authorFace: String?
+    let progress: Int?
+    let history: HistoryIdentity
+
+    enum CodingKeys: String, CodingKey {
+        case title, cover, duration, progress, history
+        case authorName = "author_name"
+        case authorFace = "author_face"
+    }
+
+    var video: VideoSummary? {
+        guard let bvid = history.bvid, !bvid.isEmpty else { return nil }
+        return VideoSummary(bvid: bvid, title: title, pic: cover, duration: duration, ownerName: authorName, ownerFace: authorFace)
+    }
+}
+
+struct HistoryIdentity: Decodable, Sendable {
+    let bvid: String?
+    let cid: Int64?
+}
+
+struct FavoriteFolderData: Decodable, Sendable {
+    let list: [FavoriteFolder]
+}
+
+struct FavoriteFolder: Decodable, Identifiable, Hashable, Sendable {
+    let id: Int64
+    let title: String
+    let mediaCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title
+        case mediaCount = "media_count"
+    }
+}
+
+struct FavoriteMediaData: Decodable, Sendable {
+    let medias: [FavoriteMedia]?
+}
+
+struct FavoriteMedia: Decodable, Sendable {
+    let bvid: String?
+    let title: String
+    let cover: String
+    let duration: Int
+    let upper: FavoriteUpper
+    let countInfo: FavoriteCountInfo?
+
+    enum CodingKeys: String, CodingKey {
+        case bvid, title, cover, duration, upper
+        case countInfo = "cnt_info"
+    }
+
+    var video: VideoSummary? {
+        guard let bvid, !bvid.isEmpty else { return nil }
+        return VideoSummary(bvid: bvid, title: title, pic: cover, duration: duration, ownerName: upper.name, ownerFace: upper.face, view: countInfo?.play, danmaku: countInfo?.danmaku)
+    }
+}
+
+struct FavoriteUpper: Decodable, Sendable {
+    let name: String
+    let face: String?
+}
+
+struct FavoriteCountInfo: Decodable, Sendable {
+    let play: Int?
+    let danmaku: Int?
 }
 
 struct PlaybackRequest: Identifiable, Sendable {
