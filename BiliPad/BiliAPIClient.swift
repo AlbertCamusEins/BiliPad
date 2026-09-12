@@ -16,7 +16,8 @@ struct BiliAPIClient: Sendable {
         let value: PlayURLData = try await get("/x/player/playurl", query: [
             "bvid": bvid, "cid": "\(cid)", "qn": "64", "fnval": "0", "fnver": "0", "fourk": "0", "platform": "html5"
         ], cookie: cookie)
-        let candidate = value.durl?.first.flatMap { [$0.url] + ($0.backupURL ?? []) }.first(where: { URL(string: $0) != nil })
+        let candidates = value.durl?.first.map { [$0.url] + ($0.backupURL ?? []) } ?? []
+        let candidate = candidates.first(where: { URL(string: $0) != nil })
         guard let candidate, let url = URL(string: candidate) else { throw BiliError.noPlayableStream }
         return url
     }
