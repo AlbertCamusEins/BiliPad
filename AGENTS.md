@@ -2,7 +2,7 @@
 
 ## Scope
 
-Implement only the active milestone described in `README.md`. The current milestone is V0.1.
+Implement only the active milestone described in `README.md`. The current milestone is V0.1.1.
 
 Do not add or implement:
 

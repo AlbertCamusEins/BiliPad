@@ -3,7 +3,8 @@ const assert = require("node:assert/strict");
 
 const {
   scoreCandidate,
-  directionFromVector
+  directionFromVector,
+  isSupportedAction
 } = require("../BiliPad/Resources/focus-navigation.js");
 
 function rect(left, top, width = 100, height = 60) {
@@ -39,3 +40,9 @@ test("scoreCandidate permits uneven grids", () => {
   assert.ok(score > 0);
 });
 
+test("player actions are accepted by the bridge", () => {
+  assert.equal(isSupportedAction("danmaku"), true);
+  assert.equal(isSupportedAction("fullscreen"), true);
+  assert.equal(isSupportedAction("disableAutoplay"), true);
+  assert.equal(isSupportedAction("volumeUp"), false);
+});

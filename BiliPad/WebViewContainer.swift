@@ -4,6 +4,9 @@ import WebKit
 
 struct WebViewContainer: UIViewRepresentable {
     static let homeURL = URL(string: "https://www.bilibili.com/")!
+    static let loginURL = URL(
+        string: "https://passport.bilibili.com/login?gourl=https%3A%2F%2Fwww.bilibili.com%2F"
+    )!
 
     @ObservedObject var model: WebViewModel
 
@@ -102,23 +105,28 @@ struct WebViewContainer: UIViewRepresentable {
 
         func webView(
             _ webView: WKWebView,
-            decidePolicyFor navigationAction: WKNavigationAction
-        ) async -> WKNavigationActionPolicy {
+            decidePolicyFor navigationAction: WKNavigationAction,
+            preferences: WKWebpagePreferences
+        ) async -> (WKNavigationActionPolicy, WKWebpagePreferences) {
             guard let url = navigationAction.request.url else {
-                return .cancel
+                return (.cancel, preferences)
             }
 
+            preferences.preferredContentMode = Self.isAuthenticationHost(url.host ?? "")
+                ? .mobile
+                : .desktop
+
             if navigationAction.targetFrame?.isMainFrame == false {
-                return .allow
+                return (.allow, preferences)
             }
 
             guard Self.isAllowedTopLevelURL(url) else {
                 if ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
                     _ = await UIApplication.shared.open(url)
                 }
-                return .cancel
+                return (.cancel, preferences)
             }
-            return .allow
+            return (.allow, preferences)
         }
 
         func webView(
@@ -143,6 +151,7 @@ struct WebViewContainer: UIViewRepresentable {
             didFailProvisionalNavigation navigation: WKNavigation!,
             withError error: Error
         ) {
+            guard NavigationErrorPolicy.shouldReport(error) else { return }
             model.visibleError = "网页加载失败：\(error.localizedDescription)"
         }
 
@@ -151,6 +160,7 @@ struct WebViewContainer: UIViewRepresentable {
             didFail navigation: WKNavigation!,
             withError error: Error
         ) {
+            guard NavigationErrorPolicy.shouldReport(error) else { return }
             model.visibleError = "网页导航失败：\(error.localizedDescription)"
         }
 
@@ -170,6 +180,11 @@ struct WebViewContainer: UIViewRepresentable {
         private static func isAllowedTopLevelURL(_ url: URL) -> Bool {
             guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return false }
             return isBilibiliHost(url.host ?? "")
+        }
+
+        private static func isAuthenticationHost(_ host: String) -> Bool {
+            let normalized = host.lowercased()
+            return normalized == "passport.bilibili.com" || normalized == "account.bilibili.com"
         }
 
         private static func isBilibiliHost(_ host: String) -> Bool {

@@ -33,6 +33,10 @@ final class WebViewModel: ObservableObject {
         webView?.reload()
     }
 
+    func openLogin() {
+        webView?.load(URLRequest(url: WebViewContainer.loginURL))
+    }
+
     func clearWebsiteData() {
         let store = WKWebsiteDataStore.default()
         store.removeData(

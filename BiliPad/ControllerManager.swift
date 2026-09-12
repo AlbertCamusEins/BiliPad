@@ -9,6 +9,9 @@ enum ControllerAction: String, Sendable {
     case right
     case confirm
     case back
+    case danmaku
+    case fullscreen
+    case disableAutoplay
     case menu
 }
 
@@ -92,6 +95,9 @@ final class ControllerManager: ObservableObject {
 
         gamepad.buttonA.pressedChangedHandler = Self.buttonHandler(owner: self, action: .confirm)
         gamepad.buttonB.pressedChangedHandler = Self.buttonHandler(owner: self, action: .back)
+        gamepad.buttonX.pressedChangedHandler = Self.buttonHandler(owner: self, action: .danmaku)
+        gamepad.buttonY.pressedChangedHandler = Self.buttonHandler(owner: self, action: .fullscreen)
+        gamepad.buttonOptions?.pressedChangedHandler = Self.buttonHandler(owner: self, action: .disableAutoplay)
         gamepad.buttonMenu.pressedChangedHandler = Self.buttonHandler(owner: self, action: .menu)
     }
 
@@ -111,6 +117,9 @@ final class ControllerManager: ObservableObject {
         gamepad.leftThumbstick.valueChangedHandler = nil
         gamepad.buttonA.pressedChangedHandler = nil
         gamepad.buttonB.pressedChangedHandler = nil
+        gamepad.buttonX.pressedChangedHandler = nil
+        gamepad.buttonY.pressedChangedHandler = nil
+        gamepad.buttonOptions?.pressedChangedHandler = nil
         gamepad.buttonMenu.pressedChangedHandler = nil
     }
 

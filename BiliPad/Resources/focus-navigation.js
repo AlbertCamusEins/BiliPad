@@ -10,16 +10,51 @@
     '[role="button"]'
   ]);
 
+  const PLAYER_SELECTORS = Object.freeze({
+    danmakuToggle: Object.freeze([
+      '[aria-label*="开启弹幕"]',
+      '[aria-label*="关闭弹幕"]',
+      '[title*="开启弹幕"]',
+      '[title*="关闭弹幕"]',
+      '.bpx-player-dm-switch input',
+      '.bpx-player-dm-switch'
+    ]),
+    autoplayToggle: Object.freeze([
+      'input[aria-label*="自动连播"]',
+      '[role="switch"][aria-label*="自动连播"]',
+      '[title*="自动连播"]',
+      '.bpx-player-ctrl-setting-autoplay input',
+      '.bpx-player-ctrl-setting-autoplay'
+    ]),
+    fullscreenExit: Object.freeze([
+      '[aria-label*="退出全屏"]',
+      '[title*="退出全屏"]',
+      '.bpx-player-ctrl-web-leave',
+      '.bpx-player-ctrl-full[aria-label*="退出"]'
+    ])
+  });
+
   const FOCUSED_CLASS = "bilipad-focused";
   const STORAGE_PREFIX = "bilipad.navigation.";
-  const VALID_ACTIONS = new Set(["up", "down", "left", "right", "confirm", "back"]);
+  const VALID_ACTIONS = new Set([
+    "up",
+    "down",
+    "left",
+    "right",
+    "confirm",
+    "back",
+    "danmaku",
+    "fullscreen",
+    "disableAutoplay"
+  ]);
 
   const state = {
     nodes: [],
     focused: null,
     observer: null,
     scanTimer: null,
-    lastURL: ""
+    lastURL: "",
+    autoplayDisabled: false
   };
 
   function center(rect) {
@@ -185,6 +220,7 @@
       const urlChanged = state.lastURL !== location.href;
       state.lastURL = location.href;
       rescan({ restore: urlChanged });
+      applyAutoplayPolicy();
     }, 140);
   }
 
@@ -239,6 +275,96 @@
     })[0] || null;
   }
 
+  function firstVisible(selectors) {
+    for (const selector of selectors) {
+      const match = Array.from(document.querySelectorAll(selector)).find(isRendered);
+      if (match) return match;
+    }
+    return null;
+  }
+
+  function activationTarget(element) {
+    if (!element) return null;
+    return element.closest('button, label, [role="button"], [role="switch"]') || element;
+  }
+
+  function dispatchKeyboardShortcut(key, code, keyCode) {
+    const focused = document.activeElement;
+    if (focused?.matches?.('input, textarea, [contenteditable="true"]')) focused.blur();
+    const target = document.activeElement || document.body || document.documentElement;
+
+    for (const type of ["keydown", "keyup"]) {
+      const event = new KeyboardEvent(type, {
+        key,
+        code,
+        bubbles: true,
+        cancelable: true
+      });
+      try {
+        Object.defineProperty(event, "keyCode", { value: keyCode });
+        Object.defineProperty(event, "which", { value: keyCode });
+      } catch (_) {
+        // Modern handlers use key/code; legacy numeric fields are best-effort.
+      }
+      target.dispatchEvent(event);
+    }
+    return true;
+  }
+
+  function toggleDanmaku() {
+    const toggle = firstVisible(PLAYER_SELECTORS.danmakuToggle);
+    if (toggle) {
+      activationTarget(toggle).click();
+      return true;
+    }
+    return dispatchKeyboardShortcut("d", "KeyD", 68);
+  }
+
+  function toggleFullscreen() {
+    return dispatchKeyboardShortcut("f", "KeyF", 70);
+  }
+
+  function explicitToggleState(element) {
+    const input = element.matches?.('input[type="checkbox"]')
+      ? element
+      : element.querySelector?.('input[type="checkbox"]');
+    if (input && typeof input.checked === "boolean") return input.checked;
+
+    for (const name of ["aria-checked", "aria-pressed"]) {
+      const value = element.getAttribute?.(name);
+      if (value === "true") return true;
+      if (value === "false") return false;
+    }
+    return null;
+  }
+
+  function applyAutoplayPolicy() {
+    if (!state.autoplayDisabled) return;
+    for (const video of document.querySelectorAll("video")) {
+      video.autoplay = false;
+      video.loop = false;
+      video.removeAttribute("autoplay");
+    }
+  }
+
+  function disableAutoplay() {
+    state.autoplayDisabled = true;
+    applyAutoplayPolicy();
+
+    const toggle = firstVisible(PLAYER_SELECTORS.autoplayToggle);
+    if (toggle && explicitToggleState(toggle) !== false) {
+      activationTarget(toggle).click();
+    }
+    return true;
+  }
+
+  function stopAutoplayAtEnd(event) {
+    if (!state.autoplayDisabled || event.target?.tagName !== "VIDEO") return;
+    event.stopImmediatePropagation();
+    event.target.autoplay = false;
+    event.target.loop = false;
+  }
+
   function reportPlaybackError(error) {
     const message = `播放操作失败：${error?.message || String(error)}`;
     globalScope.__bilipad?.reportError?.(message);
@@ -259,12 +385,25 @@
   }
 
   function closeTransientLayer() {
+    const fullscreenVideo = Array.from(document.querySelectorAll("video"))
+      .find((video) => video.webkitDisplayingFullscreen);
+    if (fullscreenVideo && typeof fullscreenVideo.webkitExitFullscreen === "function") {
+      fullscreenVideo.webkitExitFullscreen();
+      return true;
+    }
+
     if (document.fullscreenElement && document.exitFullscreen) {
       document.exitFullscreen().catch(() => {});
       return true;
     }
     if (document.webkitFullscreenElement && document.webkitExitFullscreen) {
       document.webkitExitFullscreen();
+      return true;
+    }
+
+    const fullscreenExit = firstVisible(PLAYER_SELECTORS.fullscreenExit);
+    if (fullscreenExit) {
+      activationTarget(fullscreenExit).click();
       return true;
     }
 
@@ -283,6 +422,9 @@
     const video = visibleVideo();
 
     if (video) {
+      if (action === "danmaku") return toggleDanmaku();
+      if (action === "fullscreen") return toggleFullscreen();
+      if (action === "disableAutoplay") return disableAutoplay();
       if (action === "confirm") {
         togglePlayback(video);
         return true;
@@ -300,6 +442,7 @@
     }
 
     if (["up", "down", "left", "right"].includes(action)) return move(action);
+    if (action === "disableAutoplay") return disableAutoplay();
     if (action === "confirm" && state.focused) {
       savePosition();
       state.focused.click();
@@ -319,6 +462,7 @@
     rescan({ restore: true });
     state.observer = new MutationObserver(scheduleRescan);
     state.observer.observe(document.documentElement, { childList: true, subtree: true });
+    document.addEventListener("ended", stopAutoplayAtEnd, true);
     addEventListener("popstate", () => setTimeout(() => rescan({ restore: true }), 80));
     addEventListener("pageshow", () => setTimeout(() => rescan({ restore: true }), 80));
     addEventListener("pagehide", savePosition);
@@ -327,7 +471,11 @@
     root.navigation = { handleAction, rescan };
   }
 
-  const testAPI = { scoreCandidate, directionFromVector };
+  const testAPI = {
+    scoreCandidate,
+    directionFromVector,
+    isSupportedAction: (action) => VALID_ACTIONS.has(action)
+  };
   if (typeof module !== "undefined" && module.exports) module.exports = testAPI;
   if (typeof document !== "undefined") initialize();
 })(typeof window !== "undefined" ? window : globalThis);

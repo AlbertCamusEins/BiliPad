@@ -44,6 +44,12 @@ jobs:
             -o "$RUNNER_TEMP/browser-identity-test"
           "$RUNNER_TEMP/browser-identity-test"
 
+      - name: Test navigation error policy
+        run: |
+          swiftc BiliPad/NavigationErrorPolicy.swift Tests/navigation-error-policy.swift \
+            -o "$RUNNER_TEMP/navigation-error-policy-test"
+          "$RUNNER_TEMP/navigation-error-policy-test"
+
       - name: Install XcodeGen
         run: |
           brew install xcodegen
