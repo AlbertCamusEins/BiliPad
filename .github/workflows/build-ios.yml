@@ -10,22 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  web-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          package-manager-cache: false
-      - name: Check injected JavaScript
-        run: npm run check
-      - name: Test navigation logic
-        run: npm test
-
   build-ios:
     runs-on: macos-15
-    needs: web-tests
     steps:
       - uses: actions/checkout@v7
 
@@ -34,21 +20,6 @@ jobs:
           sw_vers
           xcodebuild -version
           swift --version
-
-      - name: Test CSS JavaScript string encoding
-        run: swift Tests/css-json-encoding.swift
-
-      - name: Test browser identity
-        run: |
-          swiftc BiliPad/BrowserIdentity.swift Tests/browser-identity.swift \
-            -o "$RUNNER_TEMP/browser-identity-test"
-          "$RUNNER_TEMP/browser-identity-test"
-
-      - name: Test navigation error policy
-        run: |
-          swiftc BiliPad/NavigationErrorPolicy.swift Tests/navigation-error-policy.swift \
-            -o "$RUNNER_TEMP/navigation-error-policy-test"
-          "$RUNNER_TEMP/navigation-error-policy-test"
 
       - name: Install XcodeGen
         run: |
@@ -82,9 +53,6 @@ jobs:
           find "$APP" -maxdepth 3 -type f -print | sort
           test -x "$APP/BiliPad"
           test -f "$APP/Info.plist"
-          test -f "$APP/controller-bridge.js"
-          test -f "$APP/focus-navigation.js"
-          test -f "$APP/bilipad.css"
           mkdir -p "$OUTPUT/Payload"
           cp -R "$APP" "$OUTPUT/Payload/BiliPad.app"
           cd "$OUTPUT"

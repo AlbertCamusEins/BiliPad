@@ -18,15 +18,6 @@ targets:
       - path: BiliPad
         excludes:
           - Resources
-      - path: BiliPad/Resources/controller-bridge.js
-        group: BiliPad/Resources
-        buildPhase: resources
-      - path: BiliPad/Resources/focus-navigation.js
-        group: BiliPad/Resources
-        buildPhase: resources
-      - path: BiliPad/Resources/bilipad.css
-        group: BiliPad/Resources
-        buildPhase: resources
     info:
       path: BiliPad/Info.plist
     settings:
