@@ -68,11 +68,13 @@ struct ContentView: View {
     private var settingsView: some View {
         NavigationStack {
             Form {
-                Section("账号") {
+                Section {
                     Button("登录 B 站") {
                         webModel.openLogin()
                         showsSettings = false
                     }
+                } header: {
+                    Text("账号")
                 } footer: {
                     Text("使用 B 站官方网页完成密码、短信或第三方登录；BiliPad 不读取账号凭据。")
                 }
