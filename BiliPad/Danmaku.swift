@@ -1,6 +1,5 @@
 import AVFoundation
 import Foundation
-import FoundationXML
 import SwiftUI
 
 struct DanmakuItem: Identifiable, Sendable {

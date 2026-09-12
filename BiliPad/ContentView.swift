@@ -616,7 +616,7 @@ struct ContentView: View {
         case "搜索":
             keyboardVisible = false
             Task { await performSearch() }
-        let key: searchText.append(key)
+        default: searchText.append(keyboardKeys[keyboardIndex])
         }
     }
 
