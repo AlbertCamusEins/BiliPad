@@ -47,6 +47,7 @@ struct VideoPage: Decodable, Identifiable, Hashable, Sendable {
 }
 
 struct VideoDetail: Decodable, Identifiable, Sendable {
+    let aid: Int64
     let bvid: String
     let title: String
     let pic: String
@@ -61,6 +62,34 @@ struct VideoDetail: Decodable, Identifiable, Sendable {
 struct PlayURLData: Decodable, Sendable {
     let durl: [PlaySegment]?
 }
+
+struct SearchData: Decodable, Sendable { let result: [SearchVideo]? }
+struct SearchVideo: Decodable, Sendable {
+    let bvid: String
+    let title: String
+    let pic: String
+    let duration: String?
+    let author: String
+    let play: Int?
+    var video: VideoSummary {
+        VideoSummary(bvid: bvid, title: title.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression), pic: pic.hasPrefix("//") ? "https:\(pic)" : pic, duration: Self.seconds(duration), ownerName: author, view: play)
+    }
+    private static func seconds(_ value: String?) -> Int {
+        let parts = (value ?? "0").split(separator: ":").compactMap { Int($0) }
+        return parts.reduce(0) { $0 * 60 + $1 }
+    }
+}
+
+struct ReplyData: Decodable, Sendable { let replies: [VideoReply]? }
+struct VideoReply: Decodable, Identifiable, Sendable {
+    let rpid: Int64
+    let member: ReplyMember
+    let content: ReplyContent
+    let like: Int?
+    var id: Int64 { rpid }
+}
+struct ReplyMember: Decodable, Sendable { let uname: String; let avatar: String? }
+struct ReplyContent: Decodable, Sendable { let message: String }
 
 struct PlaySegment: Decodable, Sendable {
     let url: String

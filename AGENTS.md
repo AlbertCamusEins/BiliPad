@@ -2,7 +2,7 @@
 
 ## Scope
 
-Implement only the active milestone described in `README.md`. The current milestone is V0.4 controller navigation and remapping.
+Implement only the active milestone described in `README.md`. The current milestone is V0.5 native search, video detail, danmaku, comments, interactions, and segmented playback.
 
 Do not add or implement:
 

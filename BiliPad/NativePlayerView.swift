@@ -10,20 +10,27 @@ enum PlayerCommand: Equatable {
 
 @MainActor
 final class NativePlayerViewModel: ObservableObject {
-    let player = AVPlayer()
+    let player = AVQueuePlayer()
     @Published private(set) var isPlaying = false
     @Published private(set) var volume: Float = 1
     @Published private(set) var isLoading = true
     @Published private(set) var error: String?
+    @Published private(set) var danmaku: [DanmakuItem] = []
+    private(set) var finalItem: AVPlayerItem?
 
     func load(_ request: PlaybackRequest, cookie: String) async {
         isLoading = true
         error = nil
         do {
-            let url = try await BiliAPIClient().playURL(bvid: request.bvid, cid: request.cid, cookie: cookie)
+            async let streamRequest = BiliAPIClient().playURLs(bvid: request.bvid, cid: request.cid, cookie: cookie)
+            async let danmakuRequest = DanmakuService().load(cid: request.cid)
+            let urls = try await streamRequest
             let headers = ["User-Agent": BiliAPIClient.userAgent, "Referer": "https://www.bilibili.com/", "Cookie": cookie]
-            let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
-            player.replaceCurrentItem(with: AVPlayerItem(asset: asset))
+            let playerItems = urls.map { AVPlayerItem(asset: AVURLAsset(url: $0, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])) }
+            finalItem = playerItems.last
+            player.removeAllItems()
+            for item in playerItems { player.insert(item, after: nil) }
+            danmaku = (try? await danmakuRequest) ?? []
             player.volume = volume
             player.play()
             isPlaying = true
@@ -55,6 +62,8 @@ struct NativePlayerView: View {
     let cookie: String
     let command: PlayerCommand?
     let commandID: Int
+    let danmakuEnabled: Bool
+    let onEnded: () -> Void
     @StateObject private var model = NativePlayerViewModel()
     @State private var showsChrome = true
 
@@ -62,6 +71,7 @@ struct NativePlayerView: View {
         ZStack {
             Color.black
             PlayerCanvas(player: model.player).allowsHitTesting(false)
+            if danmakuEnabled { DanmakuOverlay(player: model.player, items: model.danmaku) }
 
             if showsChrome {
                 LinearGradient(colors: [.black.opacity(0.7), .clear, .black.opacity(0.78)], startPoint: .top, endPoint: .bottom)
@@ -84,6 +94,12 @@ struct NativePlayerView: View {
             }
 
             if model.isLoading { ProgressView("正在载入视频…") }
+            TimelineView(.periodic(from: .now, by: 0.7)) { _ in
+                if model.player.timeControlStatus == .waitingToPlayAtSpecifiedRate && !model.isLoading {
+                    VStack { ProgressView(); Text("正在加载，\(speedText)").font(.caption.monospacedDigit()) }
+                        .padding(12).background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 12))
+                }
+            }
             if let error = model.error {
                 VStack(spacing: 10) { Image(systemName: "exclamationmark.triangle").font(.largeTitle); Text(error).multilineTextAlignment(.center) }
                     .padding(24).background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 16))
@@ -94,6 +110,10 @@ struct NativePlayerView: View {
         .task(id: request.id) { await model.load(request, cookie: cookie) }
         .onChange(of: commandID) { _, _ in
             if let command { model.perform(command); showsChrome = true }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
+            guard let ended = notification.object as? AVPlayerItem, ended === model.finalItem else { return }
+            onEnded()
         }
         .onDisappear { model.stop() }
     }
@@ -113,6 +133,12 @@ struct NativePlayerView: View {
 
     private var volumeSymbol: String {
         model.volume == 0 ? "speaker.slash.fill" : (model.volume < 0.5 ? "speaker.wave.1.fill" : "speaker.wave.3.fill")
+    }
+
+    private var speedText: String {
+        let bits = model.player.currentItem?.accessLog()?.events.last?.observedBitrate ?? 0
+        guard bits > 0 else { return "0 KB/s" }
+        return String(format: "%.0f KB/s", bits / 8 / 1024)
     }
 
     private func format(_ value: Double) -> String {

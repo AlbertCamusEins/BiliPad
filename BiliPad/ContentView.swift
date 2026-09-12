@@ -28,7 +28,6 @@ struct ContentView: View {
     @State private var playerCommandID = 0
     @State private var showsLogin = false
     @State private var showsSettings = false
-    @State private var autoplayDisabled = false
     @State private var toast: String?
     @State private var favoriteFolders: [FavoriteFolder] = []
     @State private var favoriteViewMode: FavoriteViewMode = .icons
@@ -36,6 +35,22 @@ struct ContentView: View {
     @State private var favoriteFolderOpen: FavoriteFolder?
     @State private var settingsFocus = 0
     @State private var remapTarget: MappableControllerAction?
+    @State private var relatedVideos: [VideoSummary] = []
+    @State private var replies: [VideoReply] = []
+    @State private var danmakuEnabled = true
+    @State private var detailFocusZone = 0
+    @State private var sideIndex = 0
+    @State private var actionIndex = 0
+    @State private var commentIndex = 0
+    @State private var searchText = ""
+    @State private var searchFocused = false
+    @State private var keyboardVisible = false
+    @State private var keyboardIndex = 0
+    @State private var tripleAnimation = false
+    @AppStorage("lt-favorites-instead-of-like") private var ltFavorites = false
+    @AppStorage("autoplay-enabled") private var autoplayEnabled = true
+
+    private let keyboardKeys = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789").map(String.init) + ["空格", "退格", "搜索"]
 
     init() {
         let bindings = ControllerBindings()
@@ -60,6 +75,7 @@ struct ContentView: View {
             if let detail { detailOverlay(detail) }
             if let playback { playerOverlay(playback) }
             if showsSettings { settingsOverlay }
+            if keyboardVisible { keyboardOverlay }
             if let toast { toastView(toast) }
         }
         .preferredColorScheme(.dark)
@@ -127,6 +143,16 @@ struct ContentView: View {
                         Text("Y 切换").font(.caption).foregroundStyle(.secondary)
                     }
                 }.frame(maxWidth: 760)
+            }
+            if selectedTab == .recommended {
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                    TextField("搜索视频", text: $searchText).textInputAutocapitalization(.never).onSubmit { Task { await performSearch() } }
+                    Button { keyboardVisible = true; keyboardIndex = 0 } label: { Label("A 手柄输入", systemImage: "keyboard") }.buttonStyle(.plain)
+                }
+                .padding(11).background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 11))
+                .overlay { RoundedRectangle(cornerRadius: 11).stroke(searchFocused ? Color.pink : .clear, lineWidth: 2) }
+                .frame(maxWidth: 760)
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 10)
@@ -257,20 +283,112 @@ struct ContentView: View {
     private func playerOverlay(_ request: PlaybackRequest) -> some View {
         GeometryReader { geometry in
             ZStack {
-                Color.black.opacity(playerFullscreen ? 1 : 0.82).ignoresSafeArea()
+                Color(red: 0.035, green: 0.037, blue: 0.05).ignoresSafeArea()
                 if playerFullscreen {
-                    NativePlayerView(request: request, cookie: session.cookieHeader, command: playerCommand, commandID: playerCommandID)
+                    NativePlayerView(request: request, cookie: session.cookieHeader, command: playerCommand, commandID: playerCommandID, danmakuEnabled: danmakuEnabled, onEnded: advanceAutoplay)
                         .frame(width: geometry.size.width, height: geometry.size.height).ignoresSafeArea()
                 } else {
-                    let width = min(geometry.size.width - 48, 820)
-                    VStack(spacing: 10) {
-                        NativePlayerView(request: request, cookie: session.cookieHeader, command: playerCommand, commandID: playerCommandID)
-                            .frame(width: width, height: width * 9.0 / 16.0).clipShape(RoundedRectangle(cornerRadius: 18))
-                        Text("A 播放/暂停　B 返回　Y 全屏　↑↓ 音量　←→ 快退/快进").font(.caption).foregroundStyle(.secondary)
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    let totalWidth = min(geometry.size.width - 32, 1120)
+                    let videoWidth = totalWidth * 0.66
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 16) {
+                            HStack(alignment: .top, spacing: 14) {
+                                NativePlayerView(request: request, cookie: session.cookieHeader, command: playerCommand, commandID: playerCommandID, danmakuEnabled: danmakuEnabled, onEnded: advanceAutoplay)
+                                    .frame(width: videoWidth, height: videoWidth * 9.0 / 16.0)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                    .overlay { RoundedRectangle(cornerRadius: 10).stroke(detailFocusZone == 0 ? Color.pink : .clear, lineWidth: 3) }
+                                sidePanel.frame(width: totalWidth - videoWidth - 14, height: videoWidth * 9.0 / 16.0)
+                            }.id("detail-player")
+                            Text(detail?.title ?? request.title).font(.title2.bold()).lineLimit(2)
+                            if let detail {
+                                HStack(spacing: 10) {
+                                    if let face = detail.owner.face { coverImage(face).frame(width: 32, height: 32).clipShape(Circle()) }
+                                    Text(detail.owner.name).font(.headline)
+                                    if let views = detail.stat?.view { Label(formatCount(views), systemImage: "play.fill") }
+                                    if let count = detail.stat?.danmaku { Label(formatCount(count), systemImage: "text.bubble") }
+                                }.font(.caption).foregroundStyle(.secondary)
+                                if !detail.desc.isEmpty { Text(detail.desc).font(.callout).foregroundStyle(.secondary).lineLimit(4) }
+                            }
+                            interactionBar.id("detail-actions")
+                            Text("评论").font(.title2.bold()).padding(.top, 6)
+                            commentsView
+                            }.frame(width: totalWidth).padding(.vertical, 18)
+                        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .onChange(of: detailFocusZone) { _, zone in
+                            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(zone < 2 ? "detail-player" : (zone == 2 ? "detail-actions" : "comment-\(commentIndex)"), anchor: .center) }
+                        }
+                        .onChange(of: commentIndex) { _, value in
+                            if detailFocusZone == 3 { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("comment-\(value)", anchor: .center) } }
+                        }
+                    }
                 }
             }
         }.transition(.opacity)
+    }
+
+    private var sidePanel: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 9) {
+                    Text((detail?.pages.count ?? 0) > 1 ? "分集" : "相关推荐").font(.headline)
+                    ForEach(Array(sideVideos.enumerated()), id: \.element.id) { index, video in
+                        Button { sideIndex = index; activateSideItem() } label: {
+                            HStack(spacing: 9) {
+                                cover(video).frame(width: 112, height: 63)
+                                VStack(alignment: .leading, spacing: 4) { Text(video.title).font(.caption.weight(.semibold)).lineLimit(2); Text(video.owner.name).font(.caption2).foregroundStyle(.secondary) }
+                                Spacer(minLength: 0)
+                            }.padding(6).background(detailFocusZone == 1 && sideIndex == index ? Color.pink.opacity(0.25) : Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+                        }.buttonStyle(.plain).id("side-\(index)")
+                    }
+                }.padding(10)
+            }.onChange(of: sideIndex) { _, value in withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo("side-\(value)", anchor: .center) } }
+        }.background(Color.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var sideVideos: [VideoSummary] {
+        guard let detail else { return relatedVideos }
+        if detail.pages.count > 1 {
+            return detail.pages.map { VideoSummary(bvid: detail.bvid, title: "P\($0.page)  \($0.part)", pic: detail.pic, duration: $0.duration, ownerName: detail.owner.name) }
+        }
+        return relatedVideos
+    }
+
+    private var interactionBar: some View {
+        ZStack {
+            HStack(spacing: 14) {
+                interactionButton(0, "点赞", "hand.thumbsup.fill")
+                interactionButton(1, "收藏", "star.fill")
+                interactionButton(2, "投币", "bitcoinsign.circle.fill")
+                Spacer()
+                Label(danmakuEnabled ? "弹幕开" : "弹幕关", systemImage: "text.bubble").foregroundStyle(.secondary)
+                Text("X 播放　Y 全屏　LT \(ltFavorites ? "收藏" : "点赞")　RT 弹幕").font(.caption).foregroundStyle(.secondary)
+            }.padding(14).background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
+            if tripleAnimation {
+                HStack(spacing: 18) { Image(systemName: "hand.thumbsup.fill"); Image(systemName: "bitcoinsign.circle.fill"); Image(systemName: "star.fill") }
+                    .font(.system(size: 34)).foregroundStyle(.pink).transition(.scale.combined(with: .opacity))
+            }
+        }
+    }
+
+    private func interactionButton(_ index: Int, _ title: String, _ icon: String) -> some View {
+        Button { actionIndex = index; performFocusedInteraction() } label: {
+            Label(title, systemImage: icon).padding(.horizontal, 12).padding(.vertical, 9)
+                .background(detailFocusZone == 2 && actionIndex == index ? Color.pink.opacity(0.28) : Color.clear, in: Capsule())
+        }.buttonStyle(.plain)
+    }
+
+    private var commentsView: some View {
+        LazyVStack(spacing: 10) {
+            if replies.isEmpty { Text("暂无评论或评论加载失败").foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding() }
+            ForEach(Array(replies.enumerated()), id: \.element.id) { index, reply in
+                HStack(alignment: .top, spacing: 12) {
+                    if let avatar = reply.member.avatar { coverImage(avatar).frame(width: 38, height: 38).clipShape(Circle()) }
+                    VStack(alignment: .leading, spacing: 6) { Text(reply.member.uname).font(.subheadline.bold()); Text(reply.content.message).font(.callout); Label("\(reply.like ?? 0)", systemImage: "hand.thumbsup").font(.caption).foregroundStyle(.secondary) }
+                    Spacer()
+                }.padding(12).background(detailFocusZone == 3 && commentIndex == index ? Color.pink.opacity(0.18) : Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 10)).id("comment-\(index)")
+            }
+        }
     }
 
     private func toastView(_ text: String) -> some View {
@@ -286,12 +404,13 @@ struct ContentView: View {
                         HStack { Text("设置").font(.largeTitle.bold()); Spacer(); Text("A 选择　B 返回").foregroundStyle(.secondary) }
                         Text("账号与播放").font(.headline).foregroundStyle(.secondary).padding(.top, 8)
                         settingsRow(index: 0, title: session.isLoggedIn ? "重新登录" : "本机 App 一键登录", detail: session.userName, icon: "person.crop.circle")
-                        settingsRow(index: 1, title: "关闭自动连播", detail: autoplayDisabled ? "开" : "关", icon: "play.slash")
-                        settingsRow(index: 2, title: "退出本地登录", detail: session.isLoggedIn ? nil : "未登录", icon: "rectangle.portrait.and.arrow.right").opacity(session.isLoggedIn ? 1 : 0.45)
+                        settingsToggleRow(index: 1, title: "自动连播", isOn: autoplayEnabled, icon: "play.circle")
+                        settingsToggleRow(index: 2, title: "LT 短按收藏（关闭则点赞）", isOn: ltFavorites, icon: "hand.tap")
+                        settingsRow(index: 3, title: "退出本地登录", detail: session.isLoggedIn ? nil : "未登录", icon: "rectangle.portrait.and.arrow.right").opacity(session.isLoggedIn ? 1 : 0.45)
                         Text("手柄按键映射").font(.headline).foregroundStyle(.secondary).padding(.top, 10)
-                        settingsRow(index: 3, title: "恢复默认按键", detail: nil, icon: "arrow.counterclockwise")
+                        settingsRow(index: 4, title: "恢复默认按键", detail: nil, icon: "arrow.counterclockwise")
                         ForEach(Array(MappableControllerAction.allCases.enumerated()), id: \.element.id) { offset, action in
-                            settingsRow(index: offset + 4, title: action.title, detail: bindings.button(for: action).title, icon: "gamecontroller")
+                            settingsRow(index: offset + 5, title: action.title, detail: bindings.button(for: action).title, icon: "gamecontroller")
                         }
                     }.frame(maxWidth: 820).padding(28)
                 }
@@ -323,7 +442,41 @@ struct ContentView: View {
         .onTapGesture { settingsFocus = index; activateSetting() }
     }
 
+    private func settingsToggleRow(index: Int, title: String, isOn: Bool, icon: String) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon).frame(width: 26).foregroundStyle(index == settingsFocus ? .pink : .secondary)
+            Text(title).font(.headline)
+            Spacer()
+            Toggle("", isOn: .constant(isOn)).labelsHidden().tint(.green).allowsHitTesting(false)
+        }
+        .padding(15)
+        .background(index == settingsFocus ? Color.pink.opacity(0.22) : Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
+        .overlay { RoundedRectangle(cornerRadius: 12).stroke(index == settingsFocus ? Color.pink : .clear, lineWidth: 2) }
+        .id("setting-\(index)")
+        .onTapGesture { settingsFocus = index; activateSetting() }
+    }
+
+    private var keyboardOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.72).ignoresSafeArea()
+            VStack(spacing: 16) {
+                HStack { Image(systemName: "magnifyingglass"); Text(searchText.isEmpty ? "使用方向键选择字符" : searchText).frame(maxWidth: .infinity, alignment: .leading) }
+                    .font(.title3).padding(14).background(Color.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 8), spacing: 8) {
+                    ForEach(Array(keyboardKeys.enumerated()), id: \.offset) { index, key in
+                        Button { keyboardIndex = index; activateKeyboardKey() } label: {
+                            Text(key).font(.headline).frame(maxWidth: .infinity, minHeight: 42)
+                                .background(index == keyboardIndex ? Color.pink : Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
+                        }.buttonStyle(.plain)
+                    }
+                }
+                Text("方向键选择　A 输入　B 关闭").font(.caption).foregroundStyle(.secondary)
+            }.frame(maxWidth: 760).padding(24).background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 22)).padding(20)
+        }.transition(.opacity)
+    }
+
     private func handle(_ action: ControllerAction) {
+        if keyboardVisible { handleKeyboard(action); return }
         if showsLogin { handleLogin(action); return }
         if showsSettings { handleSettings(action); return }
         if playback != nil { handlePlayback(action); return }
@@ -336,10 +489,15 @@ struct ContentView: View {
         case .refresh: Task { await loadCurrentTab(); showToast("已刷新\(selectedTab.title)") }
         case .left: focusedIndex = max(0, focusedIndex - 1)
         case .right: focusedIndex = min(max(0, count - 1), focusedIndex + 1)
-        case .up: focusedIndex = max(0, focusedIndex - stride)
-        case .down: focusedIndex = min(max(0, count - 1), focusedIndex + stride)
+        case .up:
+            if selectedTab == .recommended && focusedIndex < stride { searchFocused = true }
+            else { focusedIndex = max(0, focusedIndex - stride) }
+        case .down:
+            if searchFocused { searchFocused = false }
+            else { focusedIndex = min(max(0, count - 1), focusedIndex + stride) }
         case .confirm:
-            if isBrowsingFavoriteFolders, favoriteFolders.indices.contains(focusedIndex) { openFavoriteFolder(favoriteFolders[focusedIndex]) }
+            if searchFocused { keyboardVisible = true; keyboardIndex = 0 }
+            else if isBrowsingFavoriteFolders, favoriteFolders.indices.contains(focusedIndex) { openFavoriteFolder(favoriteFolders[focusedIndex]) }
             else if items.indices.contains(focusedIndex) { openDetail(items[focusedIndex]) }
         case .back: if favoriteFolderOpen != nil { closeFavoriteFolder() }
         case .fullscreen:
@@ -351,15 +509,42 @@ struct ContentView: View {
 
     private func handlePlayback(_ action: ControllerAction) {
         switch action {
-        case .confirm: sendPlayer(.togglePlayback)
-        case .back: if playerFullscreen { playerFullscreen = false } else { playback = nil }
+        case .confirm:
+            if playerFullscreen || detailFocusZone == 0 { sendPlayer(.togglePlayback) }
+            else if detailFocusZone == 1 { activateSideItem() }
+            else if detailFocusZone == 2 { performFocusedInteraction() }
+        case .back:
+            if playerFullscreen { playerFullscreen = false }
+            else { playback = nil; detail = nil; relatedVideos = []; replies = [] }
+        case .playPause: sendPlayer(.togglePlayback)
         case .fullscreen: playerFullscreen.toggle(); showToast(playerFullscreen ? "全屏" : "窗口模式")
-        case .disableAutoplay: autoplayDisabled.toggle(); showToast(autoplayDisabled ? "已关闭自动连播" : "已开启自动连播")
-        case .up: sendPlayer(.volume(0.08)); showToast("音量 +")
-        case .down: sendPlayer(.volume(-0.08)); showToast("音量 −")
-        case .left: sendPlayer(.seek(-10)); showToast("快退 10 秒")
-        case .right: sendPlayer(.seek(10)); showToast("快进 10 秒")
-        case .danmaku: showToast("原生弹幕将在下一迭代接入")
+        case .interaction: performLTInteraction()
+        case .tripleInteraction:
+            if ltFavorites { performLTInteraction(); showToast("LT 收藏模式：长按仍执行收藏") }
+            else { performTriple() }
+        case .toggleDanmaku: danmakuEnabled.toggle(); showToast(danmakuEnabled ? "弹幕已开启" : "弹幕已关闭")
+        case .up:
+            if playerFullscreen { sendPlayer(.volume(0.08)); showToast("音量 +") }
+            else if detailFocusZone == 1 { sideIndex = max(0, sideIndex - 1) }
+            else if detailFocusZone == 3 { commentIndex = max(0, commentIndex - 1) }
+            else if detailFocusZone == 2 { detailFocusZone = 0 }
+        case .down:
+            if playerFullscreen { sendPlayer(.volume(-0.08)); showToast("音量 −") }
+            else if detailFocusZone == 1 { sideIndex = min(max(0, sideVideos.count - 1), sideIndex + 1) }
+            else if detailFocusZone == 3 { commentIndex = min(max(0, replies.count - 1), commentIndex + 1) }
+            else if detailFocusZone == 0 { detailFocusZone = 2 }
+            else if detailFocusZone == 2 { detailFocusZone = 3 }
+        case .left:
+            if playerFullscreen { sendPlayer(.seek(-10)); showToast("快退 10 秒") }
+            else if detailFocusZone == 1 { detailFocusZone = 0 }
+            else if detailFocusZone == 2 { actionIndex = max(0, actionIndex - 1) }
+            else if detailFocusZone == 3 { detailFocusZone = 2 }
+            else { sendPlayer(.seek(-10)); showToast("快退 10 秒") }
+        case .right:
+            if playerFullscreen { sendPlayer(.seek(10)); showToast("快进 10 秒") }
+            else if detailFocusZone == 0 { detailFocusZone = 1 }
+            else if detailFocusZone == 2 { actionIndex = min(2, actionIndex + 1) }
+            else { sendPlayer(.seek(10)); showToast("快进 10 秒") }
         case .menu: settingsFocus = 0; showsSettings = true
         default: break
         }
@@ -368,7 +553,7 @@ struct ContentView: View {
     private func handleSettings(_ action: ControllerAction) {
         switch action {
         case .up, .left: settingsFocus = max(0, settingsFocus - 1)
-        case .down, .right: settingsFocus = min(12, settingsFocus + 1)
+        case .down, .right: settingsFocus = min(14, settingsFocus + 1)
         case .confirm: activateSetting()
         case .back, .menu: controller.cancelCapture(); remapTarget = nil; showsSettings = false
         default: break
@@ -380,14 +565,16 @@ struct ContentView: View {
         case 0:
             showsSettings = false; showsLogin = true
         case 1:
-            autoplayDisabled.toggle(); showToast(autoplayDisabled ? "已关闭自动连播" : "已开启自动连播")
+            autoplayEnabled.toggle(); showToast(autoplayEnabled ? "已开启自动连播" : "已关闭自动连播")
         case 2:
+            ltFavorites.toggle(); showToast(ltFavorites ? "LT 已设为收藏" : "LT 已设为点赞")
+        case 3:
             guard session.isLoggedIn else { showToast("当前未登录"); return }
             session.signOut(); selectedTab = .recommended; favoriteFolders = []; favoriteFolderOpen = nil; showToast("已退出本地登录")
-        case 3:
+        case 4:
             bindings.reset(); showToast("已恢复默认按键")
-        case 4...12:
-            let action = MappableControllerAction.allCases[settingsFocus - 4]
+        case 5...14:
+            let action = MappableControllerAction.allCases[settingsFocus - 5]
             remapTarget = action
             controller.captureNextButton { button in
                 let conflict = bindings.assignments.first(where: { $0.value == button })?.key
@@ -406,6 +593,43 @@ struct ContentView: View {
         case .back: showsLogin = false
         default: break
         }
+    }
+
+    private func handleKeyboard(_ action: ControllerAction) {
+        let columns = 8
+        switch action {
+        case .left: keyboardIndex = max(0, keyboardIndex - 1)
+        case .right: keyboardIndex = min(keyboardKeys.count - 1, keyboardIndex + 1)
+        case .up: keyboardIndex = max(0, keyboardIndex - columns)
+        case .down: keyboardIndex = min(keyboardKeys.count - 1, keyboardIndex + columns)
+        case .confirm: activateKeyboardKey()
+        case .back: keyboardVisible = false
+        default: break
+        }
+    }
+
+    private func activateKeyboardKey() {
+        guard keyboardKeys.indices.contains(keyboardIndex) else { return }
+        switch keyboardKeys[keyboardIndex] {
+        case "空格": searchText.append(" ")
+        case "退格": if !searchText.isEmpty { searchText.removeLast() }
+        case "搜索":
+            keyboardVisible = false
+            Task { await performSearch() }
+        let key: searchText.append(key)
+        }
+    }
+
+    private func performSearch() async {
+        let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !keyword.isEmpty else { showToast("请输入搜索内容"); return }
+        isLoading = true; error = nil; searchFocused = false
+        do {
+            items = try await BiliAPIClient().search(keyword, cookie: session.cookieHeader)
+            focusedIndex = 0
+            if items.isEmpty { error = "没有找到相关视频" }
+        } catch { items = []; self.error = error.localizedDescription }
+        isLoading = false
     }
 
     private func handleDetail(_ action: ControllerAction, detail: VideoDetail) {
@@ -474,8 +698,77 @@ struct ContentView: View {
 
     private func openDetail(_ video: VideoSummary) {
         Task {
-            do { detail = try await BiliAPIClient().detail(bvid: video.bvid, cookie: session.cookieHeader); selectedPage = 0 }
+            do {
+                let value = try await BiliAPIClient().detail(bvid: video.bvid, cookie: session.cookieHeader)
+                detail = value; selectedPage = 0; detailFocusZone = 0; sideIndex = 0; actionIndex = 0; commentIndex = 0
+                if let first = value.pages.first { play(value, page: first) }
+                async let relatedRequest = BiliAPIClient().related(bvid: value.bvid, cookie: session.cookieHeader)
+                async let repliesRequest = BiliAPIClient().replies(aid: value.aid, cookie: session.cookieHeader)
+                relatedVideos = (try? await relatedRequest) ?? []
+                replies = (try? await repliesRequest) ?? []
+            }
             catch { showToast(error.localizedDescription) }
+        }
+    }
+
+    private func activateSideItem() {
+        guard sideVideos.indices.contains(sideIndex) else { return }
+        if let detail, detail.pages.count > 1, detail.pages.indices.contains(sideIndex) {
+            selectedPage = sideIndex; play(detail, page: detail.pages[sideIndex])
+        } else { openDetail(sideVideos[sideIndex]) }
+    }
+
+    private func advanceAutoplay() {
+        guard autoplayEnabled, let detail else { return }
+        if detail.pages.indices.contains(selectedPage + 1) {
+            selectedPage += 1; sideIndex = selectedPage; play(detail, page: detail.pages[selectedPage]); showToast("自动播放下一分集")
+        } else if detail.pages.count == 1, let next = relatedVideos.first {
+            showToast("自动播放推荐视频"); openDetail(next)
+        }
+    }
+
+    private func performLTInteraction() {
+        performInteraction(ltFavorites ? 1 : 0)
+    }
+
+    private func performFocusedInteraction() {
+        performInteraction(actionIndex)
+    }
+
+    private func performInteraction(_ action: Int) {
+        guard let detail else { return }
+        guard session.isLoggedIn, let csrf = session.csrfToken else { showToast("请先登录后操作"); return }
+        Task {
+            do {
+                switch action {
+                case 0:
+                    try await BiliAPIClient().like(bvid: detail.bvid, cookie: session.cookieHeader, csrf: csrf)
+                    showToast("已点赞")
+                case 1:
+                    if favoriteFolders.isEmpty { try await loadFavoriteFolders() }
+                    guard let folderID = favoriteFolders.first?.id else { showToast("没有可用收藏夹"); return }
+                    try await BiliAPIClient().favorite(aid: detail.aid, folderID: folderID, cookie: session.cookieHeader, csrf: csrf)
+                    showToast("已收藏到默认收藏夹")
+                case 2:
+                    try await BiliAPIClient().coin(bvid: detail.bvid, cookie: session.cookieHeader, csrf: csrf)
+                    showToast("已投 1 枚硬币")
+                default: break
+                }
+            } catch { showToast(error.localizedDescription) }
+        }
+    }
+
+    private func performTriple() {
+        guard let detail else { return }
+        guard session.isLoggedIn, let csrf = session.csrfToken else { showToast("请先登录后操作"); return }
+        Task {
+            do {
+                try await BiliAPIClient().triple(bvid: detail.bvid, cookie: session.cookieHeader, csrf: csrf)
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { tripleAnimation = true }
+                showToast("一键三连成功")
+                try? await Task.sleep(for: .seconds(1.2))
+                withAnimation(.easeOut(duration: 0.25)) { tripleAnimation = false }
+            } catch { showToast(error.localizedDescription) }
         }
     }
 

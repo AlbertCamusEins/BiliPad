@@ -22,6 +22,8 @@ final class SessionStore: ObservableObject {
         cookies.sorted(by: { $0.key < $1.key }).map { "\($0.key)=\($0.value)" }.joined(separator: "; ")
     }
 
+    var csrfToken: String? { cookies["bili_jct"] }
+
     func accept(_ source: [HTTPCookie]) {
         let accepted = source.filter {
             ($0.domain == "bilibili.com" || $0.domain.hasSuffix(".bilibili.com")) && allowedNames.contains($0.name)
