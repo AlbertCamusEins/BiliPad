@@ -68,7 +68,7 @@ struct WebViewContainer: UIViewRepresentable {
         guard
             let url = Bundle.main.url(forResource: name, withExtension: "css"),
             let css = try? String(contentsOf: url, encoding: .utf8),
-            let data = try? JSONSerialization.data(withJSONObject: css),
+            let data = try? JSONEncoder().encode(css),
             let encoded = String(data: data, encoding: .utf8)
         else {
             assertionFailure("Missing bundled stylesheet: \(name).css")

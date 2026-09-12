@@ -35,6 +35,9 @@ jobs:
           xcodebuild -version
           swift --version
 
+      - name: Test CSS JavaScript string encoding
+        run: swift Tests/css-json-encoding.swift
+
       - name: Install XcodeGen
         run: |
           brew install xcodegen
