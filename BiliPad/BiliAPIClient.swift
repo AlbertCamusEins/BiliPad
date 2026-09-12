@@ -32,8 +32,10 @@ struct BiliAPIClient: Sendable {
         return value.list.compactMap(\.video)
     }
 
-    func favoriteFolders(userID: Int64, cookie: String) async throws -> [FavoriteFolder] {
-        let value: FavoriteFolderData = try await get("/x/v3/fav/folder/created/list-all", query: ["up_mid": "\(userID)"], cookie: cookie)
+    func favoriteFolders(userID: Int64, cookie: String, resourceID: Int64? = nil) async throws -> [FavoriteFolder] {
+        var query = ["up_mid": "\(userID)"]
+        if let resourceID { query["rid"] = "\(resourceID)"; query["type"] = "2" }
+        let value: FavoriteFolderData = try await get("/x/v3/fav/folder/created/list-all", query: query, cookie: cookie)
         return value.list
     }
 
@@ -57,20 +59,31 @@ struct BiliAPIClient: Sendable {
         return value.replies ?? []
     }
 
-    func like(bvid: String, cookie: String, csrf: String) async throws {
-        try await post("/x/web-interface/archive/like", form: ["bvid": bvid, "like": "1", "csrf": csrf], cookie: cookie)
+    func isLiked(aid: Int64, cookie: String) async throws -> Bool {
+        let value: Int = try await get("/x/web-interface/archive/has/like", query: ["aid": "\(aid)"], cookie: cookie)
+        return value == 1
+    }
+
+    func isFavorited(aid: Int64, cookie: String) async throws -> Bool {
+        let value: FavoriteStatusData = try await get("/x/v2/fav/video/favoured", query: ["aid": "\(aid)"], cookie: cookie)
+        return value.favoured
+    }
+
+    func setLike(aid: Int64, liked: Bool, cookie: String, csrf: String) async throws {
+        try await post("/x/web-interface/archive/like", form: ["aid": "\(aid)", "like": liked ? "1" : "2", "csrf": csrf, "csrf_token": csrf], cookie: cookie)
     }
 
     func triple(bvid: String, cookie: String, csrf: String) async throws {
-        try await post("/x/web-interface/archive/like/triple", form: ["bvid": bvid, "csrf": csrf], cookie: cookie)
+        try await post("/x/web-interface/archive/like/triple", form: ["bvid": bvid, "csrf": csrf, "csrf_token": csrf], cookie: cookie)
     }
 
     func coin(bvid: String, cookie: String, csrf: String) async throws {
-        try await post("/x/web-interface/coin/add", form: ["bvid": bvid, "multiply": "1", "select_like": "0", "csrf": csrf], cookie: cookie)
+        try await post("/x/web-interface/coin/add", form: ["bvid": bvid, "multiply": "1", "select_like": "0", "csrf": csrf, "csrf_token": csrf], cookie: cookie)
     }
 
-    func favorite(aid: Int64, folderID: Int64, cookie: String, csrf: String) async throws {
-        try await post("/x/v3/fav/resource/deal", form: ["rid": "\(aid)", "type": "2", "add_media_ids": "\(folderID)", "csrf": csrf], cookie: cookie)
+    func setFavorite(aid: Int64, folderIDs: [Int64], favorited: Bool, cookie: String, csrf: String) async throws {
+        let folderKey = favorited ? "add_media_ids" : "del_media_ids"
+        try await post("/x/v3/fav/resource/deal", form: ["rid": "\(aid)", "type": "2", folderKey: folderIDs.map(String.init).joined(separator: ","), "csrf": csrf, "csrf_token": csrf], cookie: cookie)
     }
 
     private func get<Value: Decodable & Sendable>(
@@ -100,6 +113,9 @@ struct BiliAPIClient: Sendable {
         request.httpMethod = "POST"
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("https://www.bilibili.com/", forHTTPHeaderField: "Referer")
+        request.setValue("https://www.bilibili.com", forHTTPHeaderField: "Origin")
+        request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
+        request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
         var components = URLComponents(); components.queryItems = form.map(URLQueryItem.init(name:value:))

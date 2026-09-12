@@ -91,6 +91,8 @@ struct VideoReply: Decodable, Identifiable, Sendable {
 struct ReplyMember: Decodable, Sendable { let uname: String; let avatar: String? }
 struct ReplyContent: Decodable, Sendable { let message: String }
 
+struct FavoriteStatusData: Decodable, Sendable { let favoured: Bool }
+
 struct PlaySegment: Decodable, Sendable {
     let url: String
     let backupURL: [String]?
@@ -151,10 +153,12 @@ struct FavoriteFolder: Decodable, Identifiable, Hashable, Sendable {
     let id: Int64
     let title: String
     let mediaCount: Int?
+    let favState: Int?
 
     enum CodingKeys: String, CodingKey {
         case id, title
         case mediaCount = "media_count"
+        case favState = "fav_state"
     }
 }
 

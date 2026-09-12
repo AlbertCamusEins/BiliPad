@@ -1,3 +1,4 @@
+import Darwin
 import SwiftUI
 
 private enum ContentTab: Int, CaseIterable, Identifiable {
@@ -47,11 +48,18 @@ struct ContentView: View {
     @State private var searchFocused = false
     @State private var keyboardVisible = false
     @State private var keyboardIndex = 0
+    @State private var keyboardCandidateFocus = false
+    @State private var candidateIndex = 0
+    @State private var pinyinBuffer = ""
     @State private var tripleAnimation = false
+    @State private var isLiked = false
+    @State private var isFavorited = false
+    @State private var showsExitConfirmation = false
     @AppStorage("lt-favorites-instead-of-like") private var ltFavorites = false
     @AppStorage("autoplay-enabled") private var autoplayEnabled = true
 
-    private let keyboardKeys = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789").map(String.init) + ["空格", "退格", "搜索"]
+    private let keyboardKeys = Array("QWERTYUIOPASDFGHJKLZXCVBNM0123456789").map(String.init) + ["搜索"]
+    private var pinyinCandidates: [String] { PinyinIME.candidates(for: pinyinBuffer) }
 
     init() {
         let bindings = ControllerBindings()
@@ -84,6 +92,10 @@ struct ContentView: View {
         .onChange(of: selectedTab) { _, _ in focusedIndex = 0; favoriteFolderOpen = nil; Task { await loadCurrentTab() } }
         .sheet(isPresented: $showsLogin, onDismiss: { Task { await refreshProfile(); await loadCurrentTab() } }) { LoginSheet(session: session) }
         .onReceive(controller.actions) { handle($0) }
+        .alert("退出 BiliPad？", isPresented: $showsExitConfirmation) {
+            Button("取消", role: .cancel) {}
+            Button("退出", role: .destructive) { exit(0) }
+        } message: { Text("当前播放会立即停止。") }
     }
 
     private var contentBrowser: some View {
@@ -149,7 +161,7 @@ struct ContentView: View {
                 HStack {
                     Image(systemName: "magnifyingglass")
                     TextField("搜索视频", text: $searchText).textInputAutocapitalization(.never).onSubmit { Task { await performSearch() } }
-                    Button { keyboardVisible = true; keyboardIndex = 0 } label: { Label("A 手柄输入", systemImage: "keyboard") }.buttonStyle(.plain)
+                    Button { openKeyboard() } label: { Label("A 手柄输入", systemImage: "keyboard") }.buttonStyle(.plain)
                 }
                 .padding(11).background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 11))
                 .overlay { RoundedRectangle(cornerRadius: 11).stroke(searchFocused ? Color.pink : .clear, lineWidth: 2) }
@@ -378,6 +390,7 @@ struct ContentView: View {
         Button { actionIndex = index; performFocusedInteraction() } label: {
             Label(title, systemImage: icon).padding(.horizontal, 12).padding(.vertical, 9)
                 .background(detailFocusZone == 2 && actionIndex == index ? Color.pink.opacity(0.28) : Color.clear, in: Capsule())
+                .foregroundStyle((index == 0 && isLiked) || (index == 1 && isFavorited) ? Color.pink : Color.primary)
         }.buttonStyle(.plain)
     }
 
@@ -463,22 +476,39 @@ struct ContentView: View {
         ZStack {
             Color.black.opacity(0.72).ignoresSafeArea()
             VStack(spacing: 16) {
-                HStack { Image(systemName: "magnifyingglass"); Text(searchText.isEmpty ? "使用方向键选择字符" : searchText).frame(maxWidth: .infinity, alignment: .leading) }
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                    Text(searchText + (pinyinBuffer.isEmpty ? "" : " [\(pinyinBuffer)]"))
+                        .foregroundStyle(searchText.isEmpty && pinyinBuffer.isEmpty ? .secondary : .primary)
+                        .overlay(alignment: .leading) { if searchText.isEmpty && pinyinBuffer.isEmpty { Text("输入拼音，选择中文候选") } }
+                    Spacer()
+                }
                     .font(.title3).padding(14).background(Color.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 8), spacing: 8) {
+                if !pinyinCandidates.isEmpty {
+                    HStack(spacing: 8) {
+                        ForEach(Array(pinyinCandidates.prefix(8).enumerated()), id: \.offset) { index, candidate in
+                            Button { candidateIndex = index; commitCandidate() } label: {
+                                Text(candidate).font(.title3.bold()).frame(maxWidth: .infinity, minHeight: 42)
+                                    .background(keyboardCandidateFocus && index == candidateIndex ? Color.pink : Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
+                            }.buttonStyle(.plain)
+                        }
+                    }
+                }
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 10), spacing: 8) {
                     ForEach(Array(keyboardKeys.enumerated()), id: \.offset) { index, key in
                         Button { keyboardIndex = index; activateKeyboardKey() } label: {
                             Text(key).font(.headline).frame(maxWidth: .infinity, minHeight: 42)
-                                .background(index == keyboardIndex ? Color.pink : Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
+                                .background(!keyboardCandidateFocus && index == keyboardIndex ? Color.pink : Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
                         }.buttonStyle(.plain)
                     }
                 }
-                Text("方向键选择　A 输入　B 关闭").font(.caption).foregroundStyle(.secondary)
+                Text("A 输入/选字　X 退格　Y 空格/首选字　B 关闭").font(.caption).foregroundStyle(.secondary)
             }.frame(maxWidth: 760).padding(24).background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 22)).padding(20)
         }.transition(.opacity)
     }
 
     private func handle(_ action: ControllerAction) {
+        if action == .exitApp, playback == nil, detail == nil { showsExitConfirmation = true; return }
         if keyboardVisible { handleKeyboard(action); return }
         if showsLogin { handleLogin(action); return }
         if showsSettings { handleSettings(action); return }
@@ -490,8 +520,8 @@ struct ContentView: View {
         case .previousTab: switchTab(-1)
         case .nextTab: switchTab(1)
         case .refresh: Task { await loadCurrentTab(); showToast("已刷新\(selectedTab.title)") }
-        case .left: focusedIndex = max(0, focusedIndex - 1)
-        case .right: focusedIndex = min(max(0, count - 1), focusedIndex + 1)
+        case .left, .stickLeft: focusedIndex = max(0, focusedIndex - 1)
+        case .right, .stickRight: focusedIndex = min(max(0, count - 1), focusedIndex + 1)
         case .up, .stickUp:
             if selectedTab == .recommended && focusedIndex < stride { searchFocused = true }
             else { focusedIndex = max(0, focusedIndex - stride) }
@@ -499,7 +529,7 @@ struct ContentView: View {
             if searchFocused { searchFocused = false }
             else { focusedIndex = min(max(0, count - 1), focusedIndex + stride) }
         case .confirm:
-            if searchFocused { keyboardVisible = true; keyboardIndex = 0 }
+            if searchFocused { openKeyboard() }
             else if isBrowsingFavoriteFolders, favoriteFolders.indices.contains(focusedIndex) { openFavoriteFolder(favoriteFolders[focusedIndex]) }
             else if items.indices.contains(focusedIndex) { openDetail(items[focusedIndex]) }
         case .back: if favoriteFolderOpen != nil { closeFavoriteFolder() }
@@ -552,6 +582,17 @@ struct ContentView: View {
             else if detailFocusZone == 0 { detailFocusZone = 1 }
             else if detailFocusZone == 2 { actionIndex = min(2, actionIndex + 1) }
             else if detailFocusZone == 0, playerModel.isPlaying { sendPlayer(.seek(10)); showToast("快进 10 秒") }
+        case .stickLeft:
+            if playerFullscreen {
+                if playerModel.isPlaying { sendPlayer(.seek(-10)); showToast("快退 10 秒") }
+            } else if detailFocusZone == 1 { detailFocusZone = 0 }
+            else if detailFocusZone == 2 { actionIndex = max(0, actionIndex - 1) }
+            else if detailFocusZone == 3 { detailFocusZone = 2 }
+        case .stickRight:
+            if playerFullscreen {
+                if playerModel.isPlaying { sendPlayer(.seek(10)); showToast("快进 10 秒") }
+            } else if detailFocusZone == 0 { detailFocusZone = 1 }
+            else if detailFocusZone == 2 { actionIndex = min(2, actionIndex + 1) }
         case .menu: settingsFocus = 0; showsSettings = true
         default: break
         }
@@ -559,8 +600,8 @@ struct ContentView: View {
 
     private func handleSettings(_ action: ControllerAction) {
         switch action {
-        case .up, .left, .stickUp: settingsFocus = max(0, settingsFocus - 1)
-        case .down, .right, .stickDown: settingsFocus = min(14, settingsFocus + 1)
+        case .up, .left, .stickUp, .stickLeft: settingsFocus = max(0, settingsFocus - 1)
+        case .down, .right, .stickDown, .stickRight: settingsFocus = min(15, settingsFocus + 1)
         case .confirm: activateSetting()
         case .back, .menu: controller.cancelCapture(); remapTarget = nil; showsSettings = false
         default: break
@@ -580,7 +621,7 @@ struct ContentView: View {
             session.signOut(); selectedTab = .recommended; favoriteFolders = []; favoriteFolderOpen = nil; showToast("已退出本地登录")
         case 4:
             bindings.reset(); showToast("已恢复默认按键")
-        case 5...14:
+        case 5...15:
             let action = MappableControllerAction.allCases[settingsFocus - 5]
             remapTarget = action
             controller.captureNextButton { button in
@@ -603,28 +644,58 @@ struct ContentView: View {
     }
 
     private func handleKeyboard(_ action: ControllerAction) {
-        let columns = 8
+        let columns = 10
         switch action {
-        case .left: keyboardIndex = max(0, keyboardIndex - 1)
-        case .right: keyboardIndex = min(keyboardKeys.count - 1, keyboardIndex + 1)
-        case .up, .stickUp: keyboardIndex = max(0, keyboardIndex - columns)
-        case .down, .stickDown: keyboardIndex = min(keyboardKeys.count - 1, keyboardIndex + columns)
-        case .confirm: activateKeyboardKey()
-        case .back: keyboardVisible = false
+        case .left, .stickLeft:
+            if keyboardCandidateFocus { candidateIndex = max(0, candidateIndex - 1) }
+            else { keyboardIndex = max(0, keyboardIndex - 1) }
+        case .right, .stickRight:
+            if keyboardCandidateFocus { candidateIndex = min(max(0, pinyinCandidates.prefix(8).count - 1), candidateIndex + 1) }
+            else { keyboardIndex = min(keyboardKeys.count - 1, keyboardIndex + 1) }
+        case .up, .stickUp:
+            if keyboardIndex < columns && !pinyinCandidates.isEmpty { keyboardCandidateFocus = true; candidateIndex = min(candidateIndex, pinyinCandidates.prefix(8).count - 1) }
+            else { keyboardIndex = max(0, keyboardIndex - columns) }
+        case .down, .stickDown:
+            if keyboardCandidateFocus { keyboardCandidateFocus = false }
+            else { keyboardIndex = min(keyboardKeys.count - 1, keyboardIndex + columns) }
+        case .confirm:
+            if keyboardCandidateFocus { commitCandidate() } else { activateKeyboardKey() }
+        case .playPause: keyboardBackspace()
+        case .fullscreen:
+            if pinyinBuffer.isEmpty { searchText.append(" ") } else { candidateIndex = 0; commitCandidate() }
+        case .back: pinyinBuffer = ""; keyboardVisible = false
         default: break
         }
     }
 
     private func activateKeyboardKey() {
         guard keyboardKeys.indices.contains(keyboardIndex) else { return }
-        switch keyboardKeys[keyboardIndex] {
-        case "空格": searchText.append(" ")
-        case "退格": if !searchText.isEmpty { searchText.removeLast() }
+        let key = keyboardKeys[keyboardIndex]
+        switch key {
         case "搜索":
+            if !pinyinBuffer.isEmpty { candidateIndex = 0; commitCandidate() }
             keyboardVisible = false
             Task { await performSearch() }
-        default: searchText.append(keyboardKeys[keyboardIndex])
+        default:
+            if key.allSatisfy(\.isNumber) { searchText.append(key) }
+            else { pinyinBuffer.append(key.lowercased()) }
         }
+    }
+
+    private func openKeyboard() {
+        keyboardVisible = true; keyboardIndex = 0; keyboardCandidateFocus = false; candidateIndex = 0; pinyinBuffer = ""
+    }
+
+    private func keyboardBackspace() {
+        if !pinyinBuffer.isEmpty { pinyinBuffer.removeLast() }
+        else if !searchText.isEmpty { searchText.removeLast() }
+        candidateIndex = 0
+    }
+
+    private func commitCandidate() {
+        let candidates = pinyinCandidates
+        guard candidates.indices.contains(candidateIndex) else { return }
+        searchText.append(candidates[candidateIndex]); pinyinBuffer = ""; candidateIndex = 0; keyboardCandidateFocus = false
     }
 
     private func performSearch() async {
@@ -707,10 +778,16 @@ struct ContentView: View {
         Task {
             do {
                 let value = try await BiliAPIClient().detail(bvid: video.bvid, cookie: session.cookieHeader)
-                detail = value; selectedPage = 0; detailFocusZone = 0; sideIndex = 0; actionIndex = 0; commentIndex = 0
+                detail = value; selectedPage = 0; detailFocusZone = 0; sideIndex = 0; actionIndex = 0; commentIndex = 0; isLiked = false; isFavorited = false
                 if let first = value.pages.first { play(value, page: first) }
                 async let relatedRequest = BiliAPIClient().related(bvid: value.bvid, cookie: session.cookieHeader)
                 async let repliesRequest = BiliAPIClient().replies(aid: value.aid, cookie: session.cookieHeader)
+                if session.isLoggedIn {
+                    async let likedRequest = BiliAPIClient().isLiked(aid: value.aid, cookie: session.cookieHeader)
+                    async let favoriteRequest = BiliAPIClient().isFavorited(aid: value.aid, cookie: session.cookieHeader)
+                    isLiked = (try? await likedRequest) ?? false
+                    isFavorited = (try? await favoriteRequest) ?? false
+                }
                 relatedVideos = (try? await relatedRequest) ?? []
                 replies = (try? await repliesRequest) ?? []
             }
@@ -749,13 +826,17 @@ struct ContentView: View {
             do {
                 switch action {
                 case 0:
-                    try await BiliAPIClient().like(bvid: detail.bvid, cookie: session.cookieHeader, csrf: csrf)
-                    showToast("已点赞")
+                    let target = !isLiked
+                    try await BiliAPIClient().setLike(aid: detail.aid, liked: target, cookie: session.cookieHeader, csrf: csrf)
+                    isLiked = target; showToast(target ? "已点赞" : "已取消点赞")
                 case 1:
-                    if favoriteFolders.isEmpty { try await loadFavoriteFolders() }
-                    guard let folderID = favoriteFolders.first?.id else { showToast("没有可用收藏夹"); return }
-                    try await BiliAPIClient().favorite(aid: detail.aid, folderID: folderID, cookie: session.cookieHeader, csrf: csrf)
-                    showToast("已收藏到默认收藏夹")
+                    guard let userID = session.userID else { showToast("登录信息不完整"); return }
+                    let folders = try await BiliAPIClient().favoriteFolders(userID: userID, cookie: session.cookieHeader, resourceID: detail.aid)
+                    let target = !isFavorited
+                    let folderIDs = target ? Array(folders.prefix(1).map(\.id)) : folders.filter { $0.favState == 1 }.map(\.id)
+                    guard !folderIDs.isEmpty else { showToast(target ? "没有可用收藏夹" : "未找到原收藏夹"); return }
+                    try await BiliAPIClient().setFavorite(aid: detail.aid, folderIDs: folderIDs, favorited: target, cookie: session.cookieHeader, csrf: csrf)
+                    isFavorited = target; showToast(target ? "已收藏到默认收藏夹" : "已取消收藏")
                 case 2:
                     try await BiliAPIClient().coin(bvid: detail.bvid, cookie: session.cookieHeader, csrf: csrf)
                     showToast("已投 1 枚硬币")
@@ -771,6 +852,7 @@ struct ContentView: View {
         Task {
             do {
                 try await BiliAPIClient().triple(bvid: detail.bvid, cookie: session.cookieHeader, csrf: csrf)
+                isLiked = true; isFavorited = true
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { tripleAnimation = true }
                 showToast("一键三连成功")
                 try? await Task.sleep(for: .seconds(1.2))

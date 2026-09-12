@@ -10,7 +10,7 @@ final class SessionStore: ObservableObject {
 
     private let service = "com.bilipad.session"
     private let account = "bilibili-cookies"
-    private let allowedNames = Set(["SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5", "sid"])
+    private let allowedNames = Set(["SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5", "sid", "buvid3", "buvid4", "buvid_fp", "b_nut"])
 
     init() {
         cookies = loadKeychain()

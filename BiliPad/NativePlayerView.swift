@@ -22,6 +22,9 @@ final class NativePlayerViewModel: ObservableObject {
     private var timeObserver: Any?
 
     init() {
+        player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [])
+        try? AVAudioSession.sharedInstance().setActive(true)
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600), queue: .main) { [weak self] time in
             Task { @MainActor [weak self] in
                 self?.currentTime = time.seconds.isFinite ? time.seconds : 0

@@ -2,7 +2,7 @@
 
 ## Scope
 
-Implement only the active milestone described in `README.md`. The current milestone is V0.5 native search, video detail, danmaku, comments, interactions, and segmented playback.
+Implement only the active milestone described in `README.md`. The current milestone is V0.6 controller input, interaction-state toggles, background audio, and controller-first Chinese search input.
 
 Do not add or implement:
 

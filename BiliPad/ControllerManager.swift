@@ -3,7 +3,7 @@ import Foundation
 @preconcurrency import GameController
 
 enum ControllerAction: String, Sendable {
-    case up, down, left, right, stickUp, stickDown, confirm, back, playPause, fullscreen, interaction, tripleInteraction, toggleDanmaku, menu, previousTab, nextTab, refresh
+    case up, down, left, right, stickUp, stickDown, stickLeft, stickRight, confirm, back, playPause, fullscreen, interaction, tripleInteraction, toggleDanmaku, menu, previousTab, nextTab, refresh, exitApp
 }
 
 @MainActor
@@ -40,7 +40,7 @@ final class ControllerManager: ObservableObject {
     private func configure(_ controller: GCController) {
         guard let g = controller.extendedGamepad else { return }
         g.dpad.valueChangedHandler = { [weak self] _, x, y in Task { @MainActor [weak self] in self?.dpadDirection = Self.direction(x, y, 0.5); self?.updateRepeat() } }
-        g.leftThumbstick.valueChangedHandler = { [weak self] _, _, y in Task { @MainActor [weak self] in self?.stickDirection = Self.stickDirection(y, 0.55); self?.updateRepeat() } }
+        g.leftThumbstick.valueChangedHandler = { [weak self] _, x, y in Task { @MainActor [weak self] in self?.stickDirection = Self.stickDirection(x, y, 0.55); self?.updateRepeat() } }
         [(g.buttonA, ControllerButton.a), (g.buttonB, .b), (g.buttonX, .x), (g.buttonY, .y), (g.buttonMenu, .menu), (g.leftShoulder, .leftShoulder), (g.rightShoulder, .rightShoulder), (g.leftTrigger, .leftTrigger), (g.rightTrigger, .rightTrigger)].forEach { input, button in input.pressedChangedHandler = Self.handler(self, button) }
         g.buttonOptions?.pressedChangedHandler = Self.handler(self, .options)
         g.leftThumbstickButton?.pressedChangedHandler = Self.handler(self, .leftStick)
@@ -78,8 +78,8 @@ final class ControllerManager: ObservableObject {
         guard max(abs(x), abs(y)) >= deadZone else { return nil }
         return abs(x) > abs(y) ? (x > 0 ? .right : .left) : (y > 0 ? .up : .down)
     }
-    private static func stickDirection(_ y: Float, _ deadZone: Float) -> ControllerAction? {
-        guard abs(y) >= deadZone else { return nil }
-        return y > 0 ? .stickUp : .stickDown
+    private static func stickDirection(_ x: Float, _ y: Float, _ deadZone: Float) -> ControllerAction? {
+        guard max(abs(x), abs(y)) >= deadZone else { return nil }
+        return abs(x) > abs(y) ? (x > 0 ? .stickRight : .stickLeft) : (y > 0 ? .stickUp : .stickDown)
     }
 }

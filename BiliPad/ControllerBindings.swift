@@ -15,20 +15,20 @@ enum ControllerButton: String, CaseIterable, Codable, Identifiable, Sendable {
 }
 
 enum MappableControllerAction: String, CaseIterable, Codable, Identifiable, Sendable {
-    case confirm, back, playPause, context, interaction, toggleDanmaku, menu, previousTab, nextTab, refresh
+    case confirm, back, playPause, context, interaction, toggleDanmaku, menu, previousTab, nextTab, refresh, exitApp
     var id: String { rawValue }
     var title: String {
         switch self {
         case .confirm: "确认 / 点击焦点"; case .back: "返回"; case .playPause: "播放 / 暂停"
         case .context: "全屏 / 切换视图"; case .interaction: "点赞 / 收藏"; case .toggleDanmaku: "开关弹幕"
-        case .menu: "打开设置"; case .previousTab: "上一个标签"; case .nextTab: "下一个标签"; case .refresh: "刷新当前页面"
+        case .menu: "打开设置"; case .previousTab: "上一个标签"; case .nextTab: "下一个标签"; case .refresh: "刷新当前页面"; case .exitApp: "退出应用"
         }
     }
     var action: ControllerAction {
         switch self {
         case .confirm: .confirm; case .back: .back; case .playPause: .playPause; case .context: .fullscreen
         case .interaction: .interaction; case .toggleDanmaku: .toggleDanmaku; case .menu: .menu
-        case .previousTab: .previousTab; case .nextTab: .nextTab; case .refresh: .refresh
+        case .previousTab: .previousTab; case .nextTab: .nextTab; case .refresh: .refresh; case .exitApp: .exitApp
         }
     }
 }
@@ -36,7 +36,7 @@ enum MappableControllerAction: String, CaseIterable, Codable, Identifiable, Send
 @MainActor
 final class ControllerBindings: ObservableObject {
     @Published private(set) var assignments: [MappableControllerAction: ControllerButton]
-    private let defaultsKey = "controller-bindings-v2"
+    private let defaultsKey = "controller-bindings-v3"
     init() {
         if let data = UserDefaults.standard.data(forKey: defaultsKey), let stored = try? JSONDecoder().decode([MappableControllerAction: ControllerButton].self, from: data), MappableControllerAction.allCases.allSatisfy({ stored[$0] != nil }) { assignments = stored }
         else { assignments = Self.standard }
@@ -52,6 +52,6 @@ final class ControllerBindings: ObservableObject {
     func reset() { assignments = Self.standard; UserDefaults.standard.removeObject(forKey: defaultsKey) }
     private static let standard: [MappableControllerAction: ControllerButton] = [
         .confirm: .a, .back: .b, .playPause: .x, .context: .y, .interaction: .leftTrigger,
-        .toggleDanmaku: .rightTrigger, .menu: .menu, .previousTab: .leftShoulder, .nextTab: .rightShoulder, .refresh: .leftStick
+        .toggleDanmaku: .rightTrigger, .menu: .menu, .previousTab: .leftShoulder, .nextTab: .rightShoulder, .refresh: .leftStick, .exitApp: .options
     ]
 }
