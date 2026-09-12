@@ -38,6 +38,12 @@ jobs:
       - name: Test CSS JavaScript string encoding
         run: swift Tests/css-json-encoding.swift
 
+      - name: Test browser identity
+        run: |
+          swiftc BiliPad/BrowserIdentity.swift Tests/browser-identity.swift \
+            -o "$RUNNER_TEMP/browser-identity-test"
+          "$RUNNER_TEMP/browser-identity-test"
+
       - name: Install XcodeGen
         run: |
           brew install xcodegen

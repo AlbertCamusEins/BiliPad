@@ -19,6 +19,7 @@ struct WebViewContainer: UIViewRepresentable {
         configuration.allowsPictureInPictureMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.defaultWebpagePreferences.preferredContentMode = .desktop
+        configuration.applicationNameForUserAgent = BrowserIdentity.applicationNameForUserAgent()
 
         let userContentController = WKUserContentController()
         addBundleScript("controller-bridge", injectionTime: .atDocumentStart, to: userContentController)
