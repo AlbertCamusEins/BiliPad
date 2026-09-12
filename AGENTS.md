@@ -2,7 +2,7 @@
 
 ## Scope
 
-Implement only the active milestone described in `README.md`. The current milestone is V0.2 native MVP.
+Implement only the active milestone described in `README.md`. The current milestone is V0.4 controller navigation and remapping.
 
 Do not add or implement:
 

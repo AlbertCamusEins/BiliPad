@@ -12,7 +12,8 @@ private enum FavoriteViewMode: String, CaseIterable, Identifiable {
 }
 
 struct ContentView: View {
-    @StateObject private var controller = ControllerManager()
+    @StateObject private var bindings: ControllerBindings
+    @StateObject private var controller: ControllerManager
     @StateObject private var session = SessionStore()
     @State private var selectedTab: ContentTab = .recommended
     @State private var items: [VideoSummary] = []
@@ -30,11 +31,20 @@ struct ContentView: View {
     @State private var autoplayDisabled = false
     @State private var toast: String?
     @State private var favoriteFolders: [FavoriteFolder] = []
-    @State private var selectedFolderID: Int64?
     @State private var favoriteViewMode: FavoriteViewMode = .icons
     @State private var recommendedPage = 0
+    @State private var favoriteFolderOpen: FavoriteFolder?
+    @State private var settingsFocus = 0
+    @State private var remapTarget: MappableControllerAction?
 
-    private var usesListLayout: Bool { selectedTab == .favorites && favoriteViewMode == .list }
+    init() {
+        let bindings = ControllerBindings()
+        _bindings = StateObject(wrappedValue: bindings)
+        _controller = StateObject(wrappedValue: ControllerManager(bindings: bindings))
+    }
+
+    private var isBrowsingFavoriteFolders: Bool { selectedTab == .favorites && favoriteFolderOpen == nil }
+    private var usesListLayout: Bool { selectedTab == .favorites && (favoriteFolderOpen != nil || favoriteViewMode == .list) }
     private var columns: [GridItem] { usesListLayout ? [GridItem(.flexible())] : [GridItem(.flexible(), spacing: 18), GridItem(.flexible(), spacing: 18)] }
 
     var body: some View {
@@ -49,14 +59,13 @@ struct ContentView: View {
             }
             if let detail { detailOverlay(detail) }
             if let playback { playerOverlay(playback) }
+            if showsSettings { settingsOverlay }
             if let toast { toastView(toast) }
         }
         .preferredColorScheme(.dark)
         .task { await refreshProfile(); await loadCurrentTab() }
-        .onChange(of: selectedTab) { _, _ in focusedIndex = 0; Task { await loadCurrentTab() } }
-        .onChange(of: selectedFolderID) { _, _ in if selectedTab == .favorites { focusedIndex = 0; Task { await loadFavorites() } } }
+        .onChange(of: selectedTab) { _, _ in focusedIndex = 0; favoriteFolderOpen = nil; Task { await loadCurrentTab() } }
         .sheet(isPresented: $showsLogin, onDismiss: { Task { await refreshProfile(); await loadCurrentTab() } }) { LoginSheet(session: session) }
-        .sheet(isPresented: $showsSettings) { settings }
         .onReceive(controller.actions) { handle($0) }
     }
 
@@ -64,17 +73,28 @@ struct ContentView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 18) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { index, video in
-                        videoCard(video, focused: index == focusedIndex, list: usesListLayout)
-                            .id(video.id)
-                            .onTapGesture { focusedIndex = index; openDetail(video) }
+                    if isBrowsingFavoriteFolders {
+                        ForEach(Array(favoriteFolders.enumerated()), id: \.element.id) { index, folder in
+                            favoriteFolderCard(folder, focused: index == focusedIndex, list: favoriteViewMode == .list)
+                                .id("folder-\(folder.id)")
+                                .onTapGesture { focusedIndex = index; openFavoriteFolder(folder) }
+                        }
+                    } else {
+                        ForEach(Array(items.enumerated()), id: \.element.id) { index, video in
+                            videoCard(video, focused: index == focusedIndex, list: usesListLayout)
+                                .id(video.id)
+                                .onTapGesture { focusedIndex = index; openDetail(video) }
+                        }
                     }
                 }.padding(.horizontal, 20).padding(.vertical, 16)
             }
             .refreshable { await loadCurrentTab() }
             .onChange(of: focusedIndex) { _, value in
-                guard items.indices.contains(value) else { return }
-                withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo(items[value].id, anchor: .center) }
+                if isBrowsingFavoriteFolders, favoriteFolders.indices.contains(value) {
+                    withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo("folder-\(favoriteFolders[value].id)", anchor: .center) }
+                } else if items.indices.contains(value) {
+                    withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo(items[value].id, anchor: .center) }
+                }
             }
         }
     }
@@ -92,14 +112,20 @@ struct ContentView: View {
             }
             if selectedTab == .favorites && !favoriteFolders.isEmpty {
                 HStack {
-                    Picker("收藏夹", selection: $selectedFolderID) {
-                        ForEach(favoriteFolders) { folder in Text(folder.title).tag(Optional(folder.id)) }
-                    }.pickerStyle(.menu)
+                    if let folder = favoriteFolderOpen {
+                        Button { closeFavoriteFolder() } label: { Label("返回收藏夹", systemImage: "chevron.left") }
+                        Text(folder.title).font(.headline)
+                    } else {
+                        Text("我的收藏夹").font(.headline)
+                    }
                     Spacer()
-                    Picker("视图", selection: $favoriteViewMode) {
-                        Image(systemName: "square.grid.2x2").tag(FavoriteViewMode.icons)
-                        Image(systemName: "list.bullet").tag(FavoriteViewMode.list)
-                    }.pickerStyle(.segmented).frame(width: 110)
+                    if favoriteFolderOpen == nil {
+                        Picker("视图", selection: $favoriteViewMode) {
+                            Image(systemName: "square.grid.2x2").tag(FavoriteViewMode.icons)
+                            Image(systemName: "list.bullet").tag(FavoriteViewMode.list)
+                        }.pickerStyle(.segmented).frame(width: 110)
+                        Text("Y 切换").font(.caption).foregroundStyle(.secondary)
+                    }
                 }.frame(maxWidth: 760)
             }
         }
@@ -141,6 +167,26 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 cover(video).aspectRatio(16.0 / 9.0, contentMode: .fit)
                 metadata(video)
+            }.cardStyle(focused: focused)
+        }
+    }
+
+    @ViewBuilder private func favoriteFolderCard(_ folder: FavoriteFolder, focused: Bool, list: Bool) -> some View {
+        if list {
+            HStack(spacing: 16) {
+                Image(systemName: "folder.fill").font(.system(size: 40)).foregroundStyle(.pink).frame(width: 72, height: 64)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(folder.title).font(.headline)
+                    Text("\(folder.mediaCount ?? 0) 个视频").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(); Image(systemName: "chevron.right").foregroundStyle(.secondary)
+            }.cardStyle(focused: focused)
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                ZStack { RoundedRectangle(cornerRadius: 14).fill(Color.pink.opacity(0.18)); Image(systemName: "folder.fill").font(.system(size: 54)).foregroundStyle(.pink) }
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                Text(folder.title).font(.headline).lineLimit(1)
+                Text("\(folder.mediaCount ?? 0) 个视频").font(.caption).foregroundStyle(.secondary)
             }.cardStyle(focused: focused)
         }
     }
@@ -231,33 +277,74 @@ struct ContentView: View {
         VStack { Spacer(); Text(text).padding(.horizontal, 16).padding(.vertical, 10).background(.black.opacity(0.88), in: Capsule()).padding(.bottom, 34) }.transition(.opacity).allowsHitTesting(false)
     }
 
-    private var settings: some View {
-        NavigationStack {
-            Form {
-                Section("账号") {
-                    if let name = session.userName { LabeledContent("已登录", value: name) }
-                    Button(session.isLoggedIn ? "重新登录" : "本机 App 一键登录") { showsSettings = false; showsLogin = true }
-                    if session.isLoggedIn { Button("退出本地登录", role: .destructive) { session.signOut(); selectedTab = .recommended } }
+    private var settingsOverlay: some View {
+        ZStack {
+            Color(red: 0.035, green: 0.037, blue: 0.052).ignoresSafeArea()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack { Text("设置").font(.largeTitle.bold()); Spacer(); Text("A 选择　B 返回").foregroundStyle(.secondary) }
+                        Text("账号与播放").font(.headline).foregroundStyle(.secondary).padding(.top, 8)
+                        settingsRow(index: 0, title: session.isLoggedIn ? "重新登录" : "本机 App 一键登录", detail: session.userName, icon: "person.crop.circle")
+                        settingsRow(index: 1, title: "关闭自动连播", detail: autoplayDisabled ? "开" : "关", icon: "play.slash")
+                        settingsRow(index: 2, title: "退出本地登录", detail: session.isLoggedIn ? nil : "未登录", icon: "rectangle.portrait.and.arrow.right").opacity(session.isLoggedIn ? 1 : 0.45)
+                        Text("手柄按键映射").font(.headline).foregroundStyle(.secondary).padding(.top, 10)
+                        settingsRow(index: 3, title: "恢复默认按键", detail: nil, icon: "arrow.counterclockwise")
+                        ForEach(Array(MappableControllerAction.allCases.enumerated()), id: \.element.id) { offset, action in
+                            settingsRow(index: offset + 4, title: action.title, detail: bindings.button(for: action).title, icon: "gamecontroller")
+                        }
+                    }.frame(maxWidth: 820).padding(28)
                 }
-                Section("播放") { Toggle("关闭自动连播", isOn: $autoplayDisabled) }
-                Section("手柄") { Text("LB/RB 切换顶部标签；按下左摇杆刷新当前标签。") }
-            }.navigationTitle("设置").toolbar { Button("完成") { showsSettings = false } }
+                .onChange(of: settingsFocus) { _, value in withAnimation(.easeOut(duration: 0.16)) { proxy.scrollTo("setting-\(value)", anchor: .center) } }
+            }
+            if let target = remapTarget {
+                VStack(spacing: 14) {
+                    Image(systemName: "gamecontroller.fill").font(.system(size: 44)).foregroundStyle(.pink)
+                    Text("请输入按键").font(.title2.bold())
+                    Text("正在设置：\(target.title)\n如果按键已被占用，两项绑定会自动交换。")
+                        .multilineTextAlignment(.center).foregroundStyle(.secondary)
+                }.padding(30).background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 22)).shadow(radius: 30)
+            }
+        }.transition(.opacity)
+    }
+
+    private func settingsRow(index: Int, title: String, detail: String?, icon: String) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon).frame(width: 26).foregroundStyle(index == settingsFocus ? .pink : .secondary)
+            Text(title).font(.headline)
+            Spacer()
+            if let detail { Text(detail).foregroundStyle(.secondary) }
+            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
         }
+        .padding(15)
+        .background(index == settingsFocus ? Color.pink.opacity(0.22) : Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
+        .overlay { RoundedRectangle(cornerRadius: 12).stroke(index == settingsFocus ? Color.pink : .clear, lineWidth: 2) }
+        .id("setting-\(index)")
+        .onTapGesture { settingsFocus = index; activateSetting() }
     }
 
     private func handle(_ action: ControllerAction) {
+        if showsLogin { handleLogin(action); return }
+        if showsSettings { handleSettings(action); return }
         if playback != nil { handlePlayback(action); return }
         if let detail { handleDetail(action, detail: detail); return }
+        let count = isBrowsingFavoriteFolders ? favoriteFolders.count : items.count
+        let stride = usesListLayout ? 1 : 2
         switch action {
         case .previousTab: switchTab(-1)
         case .nextTab: switchTab(1)
         case .refresh: Task { await loadCurrentTab(); showToast("已刷新\(selectedTab.title)") }
         case .left: focusedIndex = max(0, focusedIndex - 1)
-        case .right: focusedIndex = min(max(0, items.count - 1), focusedIndex + 1)
-        case .up: focusedIndex = max(0, focusedIndex - (usesListLayout ? 1 : 2))
-        case .down: focusedIndex = min(max(0, items.count - 1), focusedIndex + (usesListLayout ? 1 : 2))
-        case .confirm: if items.indices.contains(focusedIndex) { openDetail(items[focusedIndex]) }
-        case .menu: showsSettings = true
+        case .right: focusedIndex = min(max(0, count - 1), focusedIndex + 1)
+        case .up: focusedIndex = max(0, focusedIndex - stride)
+        case .down: focusedIndex = min(max(0, count - 1), focusedIndex + stride)
+        case .confirm:
+            if isBrowsingFavoriteFolders, favoriteFolders.indices.contains(focusedIndex) { openFavoriteFolder(favoriteFolders[focusedIndex]) }
+            else if items.indices.contains(focusedIndex) { openDetail(items[focusedIndex]) }
+        case .back: if favoriteFolderOpen != nil { closeFavoriteFolder() }
+        case .fullscreen:
+            if isBrowsingFavoriteFolders { favoriteViewMode = favoriteViewMode == .icons ? .list : .icons; focusedIndex = min(focusedIndex, max(0, favoriteFolders.count - 1)); showToast(favoriteViewMode == .icons ? "图标视图" : "列表视图") }
+        case .menu: settingsFocus = 0; showsSettings = true
         default: break
         }
     }
@@ -273,7 +360,50 @@ struct ContentView: View {
         case .left: sendPlayer(.seek(-10)); showToast("快退 10 秒")
         case .right: sendPlayer(.seek(10)); showToast("快进 10 秒")
         case .danmaku: showToast("原生弹幕将在下一迭代接入")
-        case .menu: showsSettings = true
+        case .menu: settingsFocus = 0; showsSettings = true
+        default: break
+        }
+    }
+
+    private func handleSettings(_ action: ControllerAction) {
+        switch action {
+        case .up, .left: settingsFocus = max(0, settingsFocus - 1)
+        case .down, .right: settingsFocus = min(12, settingsFocus + 1)
+        case .confirm: activateSetting()
+        case .back, .menu: controller.cancelCapture(); remapTarget = nil; showsSettings = false
+        default: break
+        }
+    }
+
+    private func activateSetting() {
+        switch settingsFocus {
+        case 0:
+            showsSettings = false; showsLogin = true
+        case 1:
+            autoplayDisabled.toggle(); showToast(autoplayDisabled ? "已关闭自动连播" : "已开启自动连播")
+        case 2:
+            guard session.isLoggedIn else { showToast("当前未登录"); return }
+            session.signOut(); selectedTab = .recommended; favoriteFolders = []; favoriteFolderOpen = nil; showToast("已退出本地登录")
+        case 3:
+            bindings.reset(); showToast("已恢复默认按键")
+        case 4...12:
+            let action = MappableControllerAction.allCases[settingsFocus - 4]
+            remapTarget = action
+            controller.captureNextButton { button in
+                let conflict = bindings.assignments.first(where: { $0.value == button })?.key
+                bindings.assign(button, to: action)
+                remapTarget = nil
+                if let conflict, conflict != action { showToast("已与“\(conflict.title)”交换按键") }
+                else { showToast("已设置为 \(button.title)") }
+            }
+        default: break
+        }
+    }
+
+    private func handleLogin(_ action: ControllerAction) {
+        switch action {
+        case .confirm: NotificationCenter.default.post(name: .controllerLoginConfirm, object: nil)
+        case .back: showsLogin = false
         default: break
         }
     }
@@ -284,7 +414,7 @@ struct ContentView: View {
         case .down: selectedPage = min(max(0, detail.pages.count - 1), selectedPage + 1)
         case .confirm: if detail.pages.indices.contains(selectedPage) { play(detail, page: detail.pages[selectedPage]) }
         case .back: self.detail = nil
-        case .menu: showsSettings = true
+        case .menu: settingsFocus = 0; showsSettings = true
         default: break
         }
     }
@@ -306,8 +436,11 @@ struct ContentView: View {
                 try requireLogin(); items = try await BiliAPIClient().history(cookie: session.cookieHeader)
             case .favorites:
                 try requireLogin()
-                if favoriteFolders.isEmpty { try await loadFavoriteFolders() }
-                try await loadFavoritesThrowing()
+                if let folder = favoriteFolderOpen {
+                    items = try await BiliAPIClient().favorites(folderID: folder.id, cookie: session.cookieHeader)
+                } else {
+                    try await loadFavoriteFolders(); items = []
+                }
             }
             focusedIndex = min(focusedIndex, max(0, items.count - 1))
         } catch { items = []; self.error = error.localizedDescription }
@@ -317,7 +450,6 @@ struct ContentView: View {
     private func loadFavoriteFolders() async throws {
         guard let userID = session.userID else { throw LocalError.loginRequired }
         favoriteFolders = try await BiliAPIClient().favoriteFolders(userID: userID, cookie: session.cookieHeader)
-        if selectedFolderID == nil { selectedFolderID = favoriteFolders.first?.id }
     }
 
     private func loadFavorites() async {
@@ -327,9 +459,16 @@ struct ContentView: View {
     }
 
     private func loadFavoritesThrowing() async throws {
-        guard let folderID = selectedFolderID else { items = []; return }
+        guard let folderID = favoriteFolderOpen?.id else { items = []; return }
         items = try await BiliAPIClient().favorites(folderID: folderID, cookie: session.cookieHeader)
     }
+
+    private func openFavoriteFolder(_ folder: FavoriteFolder) {
+        favoriteFolderOpen = folder; focusedIndex = 0
+        Task { await loadFavorites() }
+    }
+
+    private func closeFavoriteFolder() { favoriteFolderOpen = nil; items = []; focusedIndex = 0 }
 
     private func requireLogin() throws { if !session.isLoggedIn { throw LocalError.loginRequired } }
 
@@ -391,10 +530,18 @@ private struct LoginSheet: View {
                 else { Button("重试") { Task { await login.begin(sessionStore: session) } } }
             }.padding().navigationTitle("登录 B 站").toolbar { Button("关闭") { dismiss() } }
             .task { await login.begin(sessionStore: session) }
+            .onReceive(NotificationCenter.default.publisher(for: .controllerLoginConfirm)) { _ in
+                if login.authorizationURL != nil { login.openBilibiliApp() }
+                else { Task { await login.begin(sessionStore: session) } }
+            }
             .onChange(of: login.phase) { _, phase in if phase == .confirmed { Task { try? await Task.sleep(for: .milliseconds(600)); dismiss() } } }
             .onDisappear { login.cancel() }
         }
     }
+}
+
+private extension Notification.Name {
+    static let controllerLoginConfirm = Notification.Name("BiliPad.controllerLoginConfirm")
 }
 
 #Preview { ContentView() }
