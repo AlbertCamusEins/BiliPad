@@ -1,0 +1,13 @@
+{
+  "name": "bilipad-web-layer",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test Tests/*.test.cjs",
+    "check": "node --check BiliPad/Resources/controller-bridge.js && node --check BiliPad/Resources/focus-navigation.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
+

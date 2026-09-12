@@ -1,0 +1,40 @@
+name: BiliPad
+
+options:
+  bundleIdPrefix: com.bilipad
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+
+targets:
+  BiliPad:
+    type: application
+    platform: iOS
+    sources:
+      - path: BiliPad
+        excludes:
+          - Resources
+    resources:
+      - path: BiliPad/Resources
+    info:
+      path: BiliPad/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bilipad.app
+        PRODUCT_NAME: BiliPad
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+
+schemes:
+  BiliPad:
+    build:
+      targets:
+        BiliPad: all
+    run:
+      config: Debug
+    archive:
+      config: Release

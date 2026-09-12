@@ -1,0 +1,88 @@
+name: Build iOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  web-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check injected JavaScript
+        run: npm run check
+      - name: Test navigation logic
+        run: npm test
+
+  build-ios:
+    runs-on: macos-15
+    needs: web-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build unsigned app
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project BiliPad.xcodeproj \
+            -scheme BiliPad \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/BiliPadDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            build | tee "$RUNNER_TEMP/xcodebuild.log"
+
+      - name: Package SideStore-resignable IPA
+        shell: bash
+        run: |
+          APP="$RUNNER_TEMP/BiliPadDerivedData/Build/Products/Release-iphoneos/BiliPad.app"
+          OUTPUT="$RUNNER_TEMP/BiliPadArtifact"
+          test -x "$APP/BiliPad"
+          test -f "$APP/Info.plist"
+          test -f "$APP/controller-bridge.js"
+          test -f "$APP/focus-navigation.js"
+          test -f "$APP/bilipad.css"
+          mkdir -p "$OUTPUT/Payload"
+          cp -R "$APP" "$OUTPUT/Payload/BiliPad.app"
+          cd "$OUTPUT"
+          zip -qry BiliPad-unsigned.ipa Payload
+          shasum -a 256 BiliPad-unsigned.ipa > BiliPad-unsigned.ipa.sha256
+          plutil -p Payload/BiliPad.app/Info.plist > app-info.txt
+          cp "$RUNNER_TEMP/xcodebuild.log" xcodebuild.log
+
+      - name: Upload IPA and build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: BiliPad-unsigned-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/BiliPadArtifact/BiliPad-unsigned.ipa
+            ${{ runner.temp }}/BiliPadArtifact/BiliPad-unsigned.ipa.sha256
+            ${{ runner.temp }}/BiliPadArtifact/app-info.txt
+            ${{ runner.temp }}/BiliPadArtifact/xcodebuild.log
+          if-no-files-found: error

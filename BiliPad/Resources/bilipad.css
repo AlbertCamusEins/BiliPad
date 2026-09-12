@@ -1,0 +1,38 @@
+/* BiliPad focus ring: the primary controller navigation affordance. */
+.bilipad-focused {
+  position: relative !important;
+  z-index: 2147483000 !important;
+  outline: 4px solid #44d7ff !important;
+  outline-offset: 4px !important;
+  border-radius: 10px !important;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.8), 0 0 22px rgba(68, 215, 255, 0.95) !important;
+  transform: scale(1.035) !important;
+  transition: transform 150ms ease, box-shadow 150ms ease, outline-color 150ms ease !important;
+}
+
+/* Keep focused content visible above sticky page chrome. */
+.bilipad-focused img,
+.bilipad-focused video {
+  border-radius: inherit !important;
+}
+
+/* Footer links are not useful during controller-first browsing. */
+footer,
+.international-footer,
+.bili-footer {
+  display: none !important;
+}
+
+/* Enlarge common controls without restructuring Bilibili's DOM. */
+button,
+[role="button"],
+input[type="search"] {
+  min-height: 38px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bilipad-focused {
+    transition: none !important;
+  }
+}
+
