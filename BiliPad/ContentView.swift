@@ -79,10 +79,12 @@ struct ContentView: View {
                     }
                 }
 
-                Section("隐私") {
+                Section {
                     Button("清除网页登录数据", role: .destructive) {
                         confirmsDataRemoval = true
                     }
+                } header: {
+                    Text("隐私")
                 } footer: {
                     Text("会清除 B 站登录状态、Cookie、缓存和本地网页数据。")
                 }

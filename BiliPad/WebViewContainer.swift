@@ -101,27 +101,23 @@ struct WebViewContainer: UIViewRepresentable {
 
         func webView(
             _ webView: WKWebView,
-            decidePolicyFor navigationAction: WKNavigationAction,
-            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
-        ) {
+            decidePolicyFor navigationAction: WKNavigationAction
+        ) async -> WKNavigationActionPolicy {
             guard let url = navigationAction.request.url else {
-                decisionHandler(.cancel)
-                return
+                return .cancel
             }
 
             if navigationAction.targetFrame?.isMainFrame == false {
-                decisionHandler(.allow)
-                return
+                return .allow
             }
 
             guard Self.isAllowedTopLevelURL(url) else {
-                decisionHandler(.cancel)
                 if ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
                     UIApplication.shared.open(url)
                 }
-                return
+                return .cancel
             }
-            decisionHandler(.allow)
+            return .allow
         }
 
         func webView(
