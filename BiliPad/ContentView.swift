@@ -32,6 +32,7 @@ struct ContentView: View {
     @State private var favoriteFolders: [FavoriteFolder] = []
     @State private var selectedFolderID: Int64?
     @State private var favoriteViewMode: FavoriteViewMode = .icons
+    @State private var recommendedPage = 0
 
     private var usesListLayout: Bool { selectedTab == .favorites && favoriteViewMode == .list }
     private var columns: [GridItem] { usesListLayout ? [GridItem(.flexible())] : [GridItem(.flexible(), spacing: 18), GridItem(.flexible(), spacing: 18)] }
@@ -298,7 +299,9 @@ struct ContentView: View {
         isLoading = true; error = nil
         do {
             switch selectedTab {
-            case .recommended: items = try await BiliAPIClient().popular()
+            case .recommended:
+                recommendedPage = recommendedPage % 10 + 1
+                items = try await BiliAPIClient().popular(page: recommendedPage)
             case .history:
                 try requireLogin(); items = try await BiliAPIClient().history(cookie: session.cookieHeader)
             case .favorites:
