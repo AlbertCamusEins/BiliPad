@@ -113,7 +113,7 @@ struct WebViewContainer: UIViewRepresentable {
 
             guard Self.isAllowedTopLevelURL(url) else {
                 if ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
-                    UIApplication.shared.open(url)
+                    _ = await UIApplication.shared.open(url)
                 }
                 return .cancel
             }
