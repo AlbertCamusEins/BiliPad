@@ -55,6 +55,7 @@ struct ContentView: View {
     @State private var isLiked = false
     @State private var isFavorited = false
     @State private var showsExitConfirmation = false
+    @State private var exitFocus = 0
     @AppStorage("lt-favorites-instead-of-like") private var ltFavorites = false
     @AppStorage("autoplay-enabled") private var autoplayEnabled = true
 
@@ -85,6 +86,7 @@ struct ContentView: View {
             if let playback { playerOverlay(playback) }
             if showsSettings { settingsOverlay }
             if keyboardVisible { keyboardOverlay }
+            if showsExitConfirmation { exitConfirmationOverlay }
             if let toast { toastView(toast) }
         }
         .preferredColorScheme(.dark)
@@ -92,10 +94,6 @@ struct ContentView: View {
         .onChange(of: selectedTab) { _, _ in focusedIndex = 0; favoriteFolderOpen = nil; Task { await loadCurrentTab() } }
         .sheet(isPresented: $showsLogin, onDismiss: { Task { await refreshProfile(); await loadCurrentTab() } }) { LoginSheet(session: session) }
         .onReceive(controller.actions) { handle($0) }
-        .alert("退出 BiliPad？", isPresented: $showsExitConfirmation) {
-            Button("取消", role: .cancel) {}
-            Button("退出", role: .destructive) { exit(0) }
-        } message: { Text("当前播放会立即停止。") }
     }
 
     private var contentBrowser: some View {
@@ -507,8 +505,35 @@ struct ContentView: View {
         }.transition(.opacity)
     }
 
+    private var exitConfirmationOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.76).ignoresSafeArea()
+            VStack(spacing: 20) {
+                Image(systemName: "power").font(.system(size: 42, weight: .semibold)).foregroundStyle(.pink)
+                Text("退出 BiliPad？").font(.title2.bold())
+                Text("当前播放会立即停止。").foregroundStyle(.secondary)
+                HStack(spacing: 14) {
+                    exitButton(index: 0, title: "取消", role: nil) { showsExitConfirmation = false }
+                    exitButton(index: 1, title: "退出", role: .destructive) { exit(0) }
+                }
+                Text("左摇杆 / 十字键选择　A 确认　B 取消").font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: 430).padding(30)
+            .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 22))
+        }.transition(.opacity)
+    }
+
+    private func exitButton(index: Int, title: String, role: ButtonRole?, action: @escaping () -> Void) -> some View {
+        Button(role: role, action: action) {
+            Text(title).font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
+                .background(exitFocus == index ? Color.pink : Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 11))
+                .overlay { RoundedRectangle(cornerRadius: 11).stroke(exitFocus == index ? Color.white : .clear, lineWidth: 2) }
+        }.buttonStyle(.plain)
+    }
+
     private func handle(_ action: ControllerAction) {
-        if action == .exitApp, playback == nil, detail == nil { showsExitConfirmation = true; return }
+        if showsExitConfirmation { handleExitConfirmation(action); return }
+        if action == .exitApp, playback == nil, detail == nil { exitFocus = 0; showsExitConfirmation = true; return }
         if keyboardVisible { handleKeyboard(action); return }
         if showsLogin { handleLogin(action); return }
         if showsSettings { handleSettings(action); return }
@@ -536,6 +561,18 @@ struct ContentView: View {
         case .fullscreen:
             if isBrowsingFavoriteFolders { favoriteViewMode = favoriteViewMode == .icons ? .list : .icons; focusedIndex = min(focusedIndex, max(0, favoriteFolders.count - 1)); showToast(favoriteViewMode == .icons ? "图标视图" : "列表视图") }
         case .menu: settingsFocus = 0; showsSettings = true
+        default: break
+        }
+    }
+
+    private func handleExitConfirmation(_ action: ControllerAction) {
+        switch action {
+        case .left, .right, .up, .down, .stickLeft, .stickRight, .stickUp, .stickDown:
+            exitFocus = exitFocus == 0 ? 1 : 0
+        case .confirm:
+            if exitFocus == 0 { showsExitConfirmation = false } else { exit(0) }
+        case .back, .exitApp:
+            showsExitConfirmation = false
         default: break
         }
     }
@@ -732,8 +769,8 @@ struct ContentView: View {
         do {
             switch selectedTab {
             case .recommended:
-                recommendedPage = recommendedPage % 10 + 1
-                items = try await BiliAPIClient().popular(page: recommendedPage)
+                recommendedPage += 1
+                items = try await BiliAPIClient().recommended(refreshIndex: recommendedPage, cookie: session.cookieHeader)
             case .history:
                 try requireLogin(); items = try await BiliAPIClient().history(cookie: session.cookieHeader)
             case .favorites:
@@ -827,7 +864,7 @@ struct ContentView: View {
                 switch action {
                 case 0:
                     let target = !isLiked
-                    try await BiliAPIClient().setLike(aid: detail.aid, liked: target, cookie: session.cookieHeader, csrf: csrf)
+                    try await BiliAPIClient().setLike(bvid: detail.bvid, liked: target, cookie: session.cookieHeader, csrf: csrf)
                     isLiked = target; showToast(target ? "已点赞" : "已取消点赞")
                 case 1:
                     guard let userID = session.userID else { showToast("登录信息不完整"); return }

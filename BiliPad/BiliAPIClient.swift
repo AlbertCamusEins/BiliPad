@@ -1,11 +1,20 @@
+import CryptoKit
 import Foundation
 
 struct BiliAPIClient: Sendable {
     static let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+    private static let apiUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
-    func popular(page: Int = 1) async throws -> [VideoSummary] {
-        let value: PopularData = try await get("/x/web-interface/popular", query: ["pn": "\(page)", "ps": "24"])
-        return value.list
+    func recommended(refreshIndex: Int, cookie: String) async throws -> [VideoSummary] {
+        let nav = try await navigation(cookie: cookie)
+        guard let wbiImage = nav.wbiImg else { throw BiliError.missingWBIKey }
+        let query = try signedWBIQuery([
+            "fresh_type": "4", "version": "1", "ps": "14",
+            "fresh_idx": "\(refreshIndex)", "fresh_idx_1h": "\(refreshIndex)",
+            "web_location": "1430650"
+        ], imageURL: wbiImage.imgURL, subURL: wbiImage.subURL)
+        let value: RecommendedData = try await get("/x/web-interface/wbi/index/top/feed/rcmd", query: query, cookie: cookie)
+        return value.item
     }
 
     func detail(bvid: String, cookie: String) async throws -> VideoDetail {
@@ -13,14 +22,20 @@ struct BiliAPIClient: Sendable {
     }
 
     func playURLs(bvid: String, cid: Int64, cookie: String) async throws -> [URL] {
-        let value: PlayURLData = try await get("/x/player/playurl", query: [
-            "bvid": bvid, "cid": "\(cid)", "qn": "64", "fnval": "0", "fnver": "0", "fourk": "0", "platform": "html5"
-        ], cookie: cookie)
-        let urls = (value.durl ?? []).compactMap { segment in
-            ([segment.url] + (segment.backupURL ?? [])).compactMap(URL.init(string:)).first
+        var lastError: Error = BiliError.noPlayableStream
+        for quality in ["64", "32", "16"] {
+            do {
+                let value: PlayURLData = try await get("/x/player/playurl", query: [
+                    "bvid": bvid, "cid": "\(cid)", "qn": quality, "fnval": "1",
+                    "fnver": "0", "fourk": "0", "platform": "html5", "high_quality": "1"
+                ], cookie: cookie, referer: "https://www.bilibili.com/video/\(bvid)")
+                let urls = (value.durl ?? []).compactMap { segment in
+                    ([segment.url] + (segment.backupURL ?? [])).compactMap(URL.init(string:)).first
+                }
+                if !urls.isEmpty { return urls }
+            } catch { lastError = error }
         }
-        guard !urls.isEmpty else { throw BiliError.noPlayableStream }
-        return urls
+        throw lastError
     }
 
     func navigation(cookie: String) async throws -> NavData {
@@ -69,8 +84,13 @@ struct BiliAPIClient: Sendable {
         return value.favoured
     }
 
-    func setLike(aid: Int64, liked: Bool, cookie: String, csrf: String) async throws {
-        try await post("/x/web-interface/archive/like", form: ["aid": "\(aid)", "like": liked ? "1" : "2", "csrf": csrf, "csrf_token": csrf], cookie: cookie)
+    func setLike(bvid: String, liked: Bool, cookie: String, csrf: String) async throws {
+        try await post(
+            "/x/web-interface/archive/like",
+            form: ["bvid": bvid, "like": liked ? "1" : "2", "csrf": csrf],
+            cookie: cookie,
+            referer: "https://www.bilibili.com/video/\(bvid)"
+        )
     }
 
     func triple(bvid: String, cookie: String, csrf: String) async throws {
@@ -96,7 +116,7 @@ struct BiliAPIClient: Sendable {
         components.queryItems = query.map(URLQueryItem.init(name:value:))
         guard let url = components.url else { throw BiliError.invalidResponse }
         var request = URLRequest(url: url)
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(Self.apiUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(referer, forHTTPHeaderField: "Referer")
         if !cookie.isEmpty { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -108,14 +128,11 @@ struct BiliAPIClient: Sendable {
         return value
     }
 
-    private func post(_ path: String, form: [String: String], cookie: String) async throws {
+    private func post(_ path: String, form: [String: String], cookie: String, referer: String = "https://www.bilibili.com/") async throws {
         var request = URLRequest(url: URL(string: "https://api.bilibili.com\(path)")!)
         request.httpMethod = "POST"
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("https://www.bilibili.com/", forHTTPHeaderField: "Referer")
-        request.setValue("https://www.bilibili.com", forHTTPHeaderField: "Origin")
-        request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
-        request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
+        request.setValue(Self.apiUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(referer, forHTTPHeaderField: "Referer")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
         var components = URLComponents(); components.queryItems = form.map(URLQueryItem.init(name:value:))
@@ -124,6 +141,25 @@ struct BiliAPIClient: Sendable {
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw BiliError.invalidResponse }
         let status = try JSONDecoder().decode(APIStatus.self, from: data)
         guard status.code == 0 else { throw BiliError.api(status.code, status.message ?? "操作失败") }
+    }
+
+    private func signedWBIQuery(_ input: [String: String], imageURL: String, subURL: String) throws -> [String: String] {
+        let imageKey = URL(string: imageURL)?.deletingPathExtension().lastPathComponent ?? ""
+        let subKey = URL(string: subURL)?.deletingPathExtension().lastPathComponent ?? ""
+        let source = Array(imageKey + subKey)
+        let order = [46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11]
+        guard source.count >= 64 else { throw BiliError.missingWBIKey }
+        let mixinKey = String(order.prefix(32).map { source[$0] })
+        var signed = input
+        signed["wts"] = String(Int(Date().timeIntervalSince1970))
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-_.~")
+        let canonical = signed.keys.sorted().map { key in
+            let value = signed[key, default: ""].filter { !"!'()*".contains($0) }
+            return "\(key)=\(value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value)"
+        }.joined(separator: "&")
+        signed["w_rid"] = Insecure.MD5.hash(data: Data((canonical + mixinKey).utf8)).map { String(format: "%02x", $0) }.joined()
+        return signed
     }
 }
 

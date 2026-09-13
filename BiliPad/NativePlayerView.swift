@@ -43,7 +43,7 @@ final class NativePlayerViewModel: ObservableObject {
             async let streamRequest = BiliAPIClient().playURLs(bvid: request.bvid, cid: request.cid, cookie: cookie)
             async let danmakuRequest = DanmakuService().load(cid: request.cid)
             let urls = try await streamRequest
-            let headers = ["User-Agent": BiliAPIClient.userAgent, "Referer": "https://www.bilibili.com/", "Cookie": cookie]
+            let headers = ["User-Agent": BiliAPIClient.userAgent, "Referer": "https://www.bilibili.com/video/\(request.bvid)", "Cookie": cookie]
             let playerItems = urls.map { AVPlayerItem(asset: AVURLAsset(url: $0, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])) }
             finalItem = playerItems.last
             player.removeAllItems()

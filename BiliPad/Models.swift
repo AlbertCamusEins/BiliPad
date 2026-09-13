@@ -33,8 +33,8 @@ extension VideoSummary {
     }
 }
 
-struct PopularData: Decodable, Sendable {
-    let list: [VideoSummary]
+struct RecommendedData: Decodable, Sendable {
+    let item: [VideoSummary]
 }
 
 struct VideoPage: Decodable, Identifiable, Hashable, Sendable {
@@ -108,10 +108,22 @@ struct NavData: Decodable, Sendable {
     let uname: String?
     let face: String?
     let mid: Int64?
+    let wbiImg: WBIImage?
 
     enum CodingKeys: String, CodingKey {
         case isLogin = "isLogin"
         case uname, face, mid
+        case wbiImg = "wbi_img"
+    }
+}
+
+struct WBIImage: Decodable, Sendable {
+    let imgURL: String
+    let subURL: String
+
+    enum CodingKeys: String, CodingKey {
+        case imgURL = "img_url"
+        case subURL = "sub_url"
     }
 }
 
@@ -206,12 +218,14 @@ enum BiliError: LocalizedError {
     case invalidResponse
     case api(Int, String)
     case noPlayableStream
+    case missingWBIKey
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse: "B 站返回了无法识别的数据"
         case let .api(code, message): "B 站接口错误 \(code)：\(message)"
         case .noPlayableStream: "未找到可直接播放的视频流"
+        case .missingWBIKey: "无法获取个性化推荐所需的动态签名"
         }
     }
 }

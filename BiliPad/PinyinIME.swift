@@ -1,34 +1,50 @@
 import Foundation
 
 enum PinyinIME {
-    private static let lexicon: [String: [String]] = [
-        "a": ["啊", "阿"], "ai": ["爱", "哎", "艾"], "an": ["安", "按", "案"], "ba": ["吧", "把", "八"],
-        "bai": ["白", "百", "败"], "ban": ["版", "半", "班"], "bei": ["被", "北", "倍"], "bi": ["比", "必", "币"],
-        "bian": ["边", "变", "编"], "bili": ["哔哩", "比例"], "bilibili": ["哔哩哔哩"], "bo": ["播", "波", "博"],
-        "chang": ["长", "常", "场"], "chi": ["吃", "持", "迟"], "da": ["大", "打", "答"], "dan": ["弹", "单", "但"],
-        "danmu": ["弹幕"], "de": ["的", "得", "地"], "dian": ["点", "电", "店"], "dianying": ["电影"],
-        "dong": ["动", "东", "懂"], "donghua": ["动画"], "duan": ["短", "段", "端"], "feng": ["风", "封", "峰"],
-        "gao": ["高", "搞", "告"], "ge": ["个", "歌", "各"], "gong": ["公", "功", "工"], "guo": ["国", "过", "果"],
-        "hao": ["好", "号", "浩"], "he": ["和", "河", "何"], "hei": ["黑", "嘿"], "heishenhua": ["黑神话"],
-        "hua": ["话", "画", "花"], "huan": ["换", "欢", "环"], "ji": ["机", "级", "集"], "jia": ["家", "加", "假"],
-        "jian": ["见", "件", "间"], "jiao": ["教", "叫", "角"], "jie": ["解", "界", "节"], "jin": ["进", "今", "金"],
-        "kan": ["看", "刊", "砍"], "ke": ["可", "科", "课"], "keji": ["科技"], "lai": ["来", "莱", "赖"],
-        "li": ["里", "理", "力"], "lian": ["连", "脸", "练"], "man": ["漫", "慢", "满"], "me": ["么"],
-        "mei": ["美", "没", "每"], "meng": ["梦", "萌", "蒙"], "mi": ["米", "迷", "密"], "mo": ["魔", "模", "末"],
-        "ni": ["你", "尼", "呢"], "nihao": ["你好"], "pai": ["拍", "排", "牌"], "ping": ["评", "屏", "平"],
-        "qi": ["起", "其", "七"], "qing": ["请", "情", "清"], "ren": ["人", "任", "认"], "ri": ["日"],
-        "shi": ["是", "时", "视", "事"], "shipin": ["视频"], "shou": ["手", "首", "收"], "shoucang": ["收藏"],
-        "shouji": ["手机"], "shijie": ["世界"], "ta": ["他", "她", "它"], "tian": ["天", "田", "甜"],
-        "wan": ["玩", "万", "完"], "wang": ["网", "王", "往"], "wo": ["我", "握", "窝"], "wode": ["我的"],
-        "xi": ["系", "西", "喜"], "xia": ["下", "夏", "侠"], "xin": ["新", "心", "信"], "you": ["有", "游", "又"],
-        "youxi": ["游戏"], "yu": ["与", "语", "鱼"], "yuan": ["原", "元", "远"], "zai": ["在", "再", "载"],
-        "zhan": ["站", "战", "展"], "zhen": ["真", "镇", "阵"], "zhong": ["中", "种", "重"], "zhongguo": ["中国"],
-        "zhu": ["主", "住", "祝"], "zui": ["最", "嘴", "罪"], "zuixin": ["最新"]
+    private struct Entry { let text: String; let weight: Int }
+    private static let lexicon: [String: [String]] = loadLexicon()
+    private static let domainTerms: [String: [String]] = [
+        "bili": ["哔哩", "比例"], "bilibili": ["哔哩哔哩"], "danmu": ["弹幕"],
+        "yuanshen": ["原神"], "saierda": ["塞尔达"], "shipin": ["视频"], "shoucang": ["收藏"]
     ]
 
     static func candidates(for pinyin: String) -> [String] {
         let key = pinyin.lowercased().filter(\.isLetter)
         guard !key.isEmpty else { return [] }
-        return lexicon[key] ?? [key]
+        let combined = (domainTerms[key] ?? []) + (lexicon[key] ?? [])
+        var seen = Set<String>()
+        let candidates = combined.filter { seen.insert($0).inserted }
+        return candidates.isEmpty ? [key] : candidates
+    }
+
+    private static func loadLexicon() -> [String: [String]] {
+        guard let url = Bundle.main.url(forResource: "pinyin_simp.dict", withExtension: "yaml"),
+              let contents = try? String(contentsOf: url, encoding: .utf8) else {
+            return ["bilibili": ["哔哩哔哩"], "danmu": ["弹幕"], "shipin": ["视频"], "shoucang": ["收藏"]]
+        }
+
+        var table: [String: [Entry]] = [:]
+        var bodyStarted = false
+        contents.enumerateLines { line, _ in
+            if !bodyStarted {
+                if line.trimmingCharacters(in: .whitespacesAndNewlines) == "..." { bodyStarted = true }
+                return
+            }
+            guard !line.isEmpty, line.first != "#" else { return }
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard fields.count >= 2 else { return }
+            let text = String(fields[0])
+            let key = fields[1].lowercased().filter(\.isLetter)
+            guard !key.isEmpty else { return }
+            let weight = fields.count > 2 ? Int(fields[2]) ?? 0 : 0
+            table[key, default: []].append(Entry(text: text, weight: weight))
+        }
+
+        return table.mapValues { entries in
+            var seen = Set<String>()
+            return entries.sorted { $0.weight > $1.weight }.compactMap { entry in
+                seen.insert(entry.text).inserted ? entry.text : nil
+            }
+        }
     }
 }

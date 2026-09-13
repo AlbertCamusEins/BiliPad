@@ -18,6 +18,8 @@ targets:
       - path: BiliPad
         excludes:
           - Resources
+      - path: BiliPad/Resources
+        buildPhase: resources
     info:
       path: BiliPad/Info.plist
     settings:
