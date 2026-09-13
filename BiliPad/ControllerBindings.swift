@@ -19,7 +19,7 @@ enum MappableControllerAction: String, CaseIterable, Codable, Identifiable, Send
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .confirm: "确认 / 点击焦点"; case .back: "返回"; case .playPause: "播放 / 暂停"
+        case .confirm: "确认 / 点击焦点"; case .back: "返回"; case .playPause: "播放 / 暂停；切换搜索焦点"
         case .context: "全屏 / 切换视图"; case .interaction: "点赞 / 收藏"; case .toggleDanmaku: "开关弹幕"
         case .menu: "打开设置"; case .previousTab: "上一个标签"; case .nextTab: "下一个标签"; case .refresh: "刷新当前页面"; case .exitApp: "退出应用"
         }

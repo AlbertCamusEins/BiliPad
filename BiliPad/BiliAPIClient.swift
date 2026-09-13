@@ -51,7 +51,20 @@ struct BiliAPIClient: Sendable {
         var query = ["up_mid": "\(userID)"]
         if let resourceID { query["rid"] = "\(resourceID)"; query["type"] = "2" }
         let value: FavoriteFolderData = try await get("/x/v3/fav/folder/created/list-all", query: query, cookie: cookie)
-        return value.list
+        guard resourceID == nil else { return value.list }
+        return await withTaskGroup(of: (Int, FavoriteFolder?).self) { group in
+            for (index, folder) in value.list.enumerated() {
+                group.addTask {
+                    let info: FavoriteFolder? = try? await get("/x/v3/fav/folder/info", query: ["media_id": "\(folder.id)"], cookie: cookie)
+                    return (index, info)
+                }
+            }
+            var folders = value.list
+            for await (index, info) in group {
+                if let info { folders[index] = info }
+            }
+            return folders
+        }
     }
 
     func favorites(folderID: Int64, cookie: String) async throws -> [VideoSummary] {
@@ -60,8 +73,13 @@ struct BiliAPIClient: Sendable {
     }
 
     func search(_ keyword: String, cookie: String) async throws -> [VideoSummary] {
-        let value: SearchData = try await get("/x/web-interface/search/type", query: ["search_type": "video", "keyword": keyword, "page": "1", "order": "totalrank"], cookie: cookie, referer: "https://search.bilibili.com/")
-        return (value.result ?? []).map(\.video)
+        let nav = try await navigation(cookie: cookie)
+        guard let wbiImage = nav.wbiImg else { throw BiliError.missingWBIKey }
+        let query = try signedWBIQuery([
+            "search_type": "video", "keyword": keyword, "page": "1", "order": "totalrank"
+        ], imageURL: wbiImage.imgURL, subURL: wbiImage.subURL)
+        let value: SearchData = try await get("/x/web-interface/wbi/search/type", query: query, cookie: cookie, referer: "https://search.bilibili.com/")
+        return value.result.map(\.video)
     }
 
     func related(bvid: String, cookie: String) async throws -> [VideoSummary] {

@@ -63,7 +63,24 @@ struct PlayURLData: Decodable, Sendable {
     let durl: [PlaySegment]?
 }
 
-struct SearchData: Decodable, Sendable { let result: [SearchVideo]? }
+struct SearchData: Decodable, Sendable {
+    let result: [SearchVideo]
+
+    private enum CodingKeys: String, CodingKey { case result }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        result = try container.decodeIfPresent([LossySearchVideo].self, forKey: .result)?.compactMap(\.value) ?? []
+    }
+}
+
+private struct LossySearchVideo: Decodable, Sendable {
+    let value: SearchVideo?
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        value = try? container.decode(SearchVideo.self)
+    }
+}
+
 struct SearchVideo: Decodable, Sendable {
     let bvid: String
     let title: String
@@ -71,6 +88,20 @@ struct SearchVideo: Decodable, Sendable {
     let duration: String?
     let author: String
     let play: Int?
+
+    private enum CodingKeys: String, CodingKey { case bvid, title, pic, duration, author, play }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        bvid = try container.decode(String.self, forKey: .bvid)
+        title = try container.decode(String.self, forKey: .title)
+        pic = try container.decode(String.self, forKey: .pic)
+        author = try container.decode(String.self, forKey: .author)
+        duration = (try? container.decode(String.self, forKey: .duration))
+            ?? (try? container.decode(Int.self, forKey: .duration)).map { String($0) }
+        play = (try? container.decode(Int.self, forKey: .play))
+            ?? (try? container.decode(String.self, forKey: .play)).flatMap { Int($0) }
+    }
     var video: VideoSummary {
         VideoSummary(bvid: bvid, title: title.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression), pic: pic.hasPrefix("//") ? "https:\(pic)" : pic, duration: Self.seconds(duration), ownerName: author, view: play)
     }
@@ -164,11 +195,12 @@ struct FavoriteFolderData: Decodable, Sendable {
 struct FavoriteFolder: Decodable, Identifiable, Hashable, Sendable {
     let id: Int64
     let title: String
+    let cover: String?
     let mediaCount: Int?
     let favState: Int?
 
     enum CodingKeys: String, CodingKey {
-        case id, title
+        case id, title, cover
         case mediaCount = "media_count"
         case favState = "fav_state"
     }

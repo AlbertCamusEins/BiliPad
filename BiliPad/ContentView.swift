@@ -35,6 +35,8 @@ struct ContentView: View {
     @State private var favoriteViewMode: FavoriteViewMode = .icons
     @State private var recommendedPage = 0
     @State private var favoriteFolderOpen: FavoriteFolder?
+    @State private var favoriteFolderFocus = 0
+    @State private var savedTabFocus: [ContentTab: Int] = [:]
     @State private var settingsFocus = 0
     @State private var remapTarget: MappableControllerAction?
     @State private var relatedVideos: [VideoSummary] = []
@@ -50,6 +52,7 @@ struct ContentView: View {
     @State private var keyboardIndex = 0
     @State private var keyboardCandidateFocus = false
     @State private var candidateIndex = 0
+    @State private var candidatePage = 0
     @State private var pinyinBuffer = ""
     @State private var tripleAnimation = false
     @State private var isLiked = false
@@ -61,6 +64,10 @@ struct ContentView: View {
 
     private let keyboardKeys = Array("QWERTYUIOPASDFGHJKLZXCVBNM0123456789").map(String.init) + ["搜索"]
     private var pinyinCandidates: [String] { PinyinIME.candidates(for: pinyinBuffer) }
+    private var visiblePinyinCandidates: [String] {
+        Array(pinyinCandidates.dropFirst(candidatePage * 8).prefix(8))
+    }
+    private var candidatePageCount: Int { max(1, (pinyinCandidates.count + 7) / 8) }
 
     init() {
         let bindings = ControllerBindings()
@@ -91,7 +98,13 @@ struct ContentView: View {
         }
         .preferredColorScheme(.dark)
         .task { await refreshProfile(); await loadCurrentTab() }
-        .onChange(of: selectedTab) { _, _ in focusedIndex = 0; favoriteFolderOpen = nil; Task { await loadCurrentTab() } }
+        .onChange(of: selectedTab) { oldTab, newTab in
+            savedTabFocus[oldTab] = oldTab == .favorites && favoriteFolderOpen != nil ? favoriteFolderFocus : focusedIndex
+            favoriteFolderOpen = nil
+            searchFocused = false
+            focusedIndex = savedTabFocus[newTab] ?? (newTab == .favorites ? favoriteFolderFocus : 0)
+            Task { await loadCurrentTab() }
+        }
         .sheet(isPresented: $showsLogin, onDismiss: { Task { await refreshProfile(); await loadCurrentTab() } }) { LoginSheet(session: session) }
         .onReceive(controller.actions) { handle($0) }
     }
@@ -160,6 +173,7 @@ struct ContentView: View {
                     Image(systemName: "magnifyingglass")
                     TextField("搜索视频", text: $searchText).textInputAutocapitalization(.never).onSubmit { Task { await performSearch() } }
                     Button { openKeyboard() } label: { Label("A 手柄输入", systemImage: "keyboard") }.buttonStyle(.plain)
+                    Text("X 切换").font(.caption.monospaced()).foregroundStyle(.secondary)
                 }
                 .padding(11).background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 11))
                 .overlay { RoundedRectangle(cornerRadius: 11).stroke(searchFocused ? Color.pink : .clear, lineWidth: 2) }
@@ -211,7 +225,7 @@ struct ContentView: View {
     @ViewBuilder private func favoriteFolderCard(_ folder: FavoriteFolder, focused: Bool, list: Bool) -> some View {
         if list {
             HStack(spacing: 16) {
-                Image(systemName: "folder.fill").font(.system(size: 40)).foregroundStyle(.pink).frame(width: 72, height: 64)
+                folderArtwork(folder).frame(width: 114, height: 64)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(folder.title).font(.headline)
                     Text("\(folder.mediaCount ?? 0) 个视频").font(.caption).foregroundStyle(.secondary)
@@ -220,12 +234,25 @@ struct ContentView: View {
             }.cardStyle(focused: focused)
         } else {
             VStack(alignment: .leading, spacing: 12) {
-                ZStack { RoundedRectangle(cornerRadius: 14).fill(Color.pink.opacity(0.18)); Image(systemName: "folder.fill").font(.system(size: 54)).foregroundStyle(.pink) }
-                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                folderArtwork(folder).aspectRatio(16.0 / 9.0, contentMode: .fit)
                 Text(folder.title).font(.headline).lineLimit(1)
                 Text("\(folder.mediaCount ?? 0) 个视频").font(.caption).foregroundStyle(.secondary)
             }.cardStyle(focused: focused)
         }
+    }
+
+    private func folderArtwork(_ folder: FavoriteFolder) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12).fill(Color.pink.opacity(0.18))
+            if let cover = folder.cover, !cover.isEmpty {
+                AsyncImage(url: secureURL(cover)) { phase in
+                    if let image = phase.image { image.resizable().scaledToFill() }
+                    else { Image(systemName: "folder.fill").font(.system(size: 36)).foregroundStyle(.pink) }
+                }.clipShape(RoundedRectangle(cornerRadius: 12))
+            } else {
+                Image(systemName: "folder.fill").font(.system(size: 42)).foregroundStyle(.pink)
+            }
+        }.clipped()
     }
 
     private func cover(_ video: VideoSummary) -> some View {
@@ -482,14 +509,16 @@ struct ContentView: View {
                     Spacer()
                 }
                     .font(.title3).padding(14).background(Color.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
-                if !pinyinCandidates.isEmpty {
+                if !visiblePinyinCandidates.isEmpty {
                     HStack(spacing: 8) {
-                        ForEach(Array(pinyinCandidates.prefix(8).enumerated()), id: \.offset) { index, candidate in
+                        Text("LB").font(.caption.monospaced()).foregroundStyle(candidatePage > 0 ? .primary : .tertiary)
+                        ForEach(Array(visiblePinyinCandidates.enumerated()), id: \.offset) { index, candidate in
                             Button { candidateIndex = index; commitCandidate() } label: {
                                 Text(candidate).font(.title3.bold()).frame(maxWidth: .infinity, minHeight: 42)
                                     .background(keyboardCandidateFocus && index == candidateIndex ? Color.pink : Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
                             }.buttonStyle(.plain)
                         }
+                        Text("RB").font(.caption.monospaced()).foregroundStyle(candidatePage + 1 < candidatePageCount ? .primary : .tertiary)
                     }
                 }
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 10), spacing: 8) {
@@ -500,7 +529,7 @@ struct ContentView: View {
                         }.buttonStyle(.plain)
                     }
                 }
-                Text("A 输入/选字　X 退格　Y 空格/首选字　B 关闭").font(.caption).foregroundStyle(.secondary)
+                Text("A 输入/选字　X 退格　Y 空格/首选字　LB/RB 翻候选　RT 搜索　B 关闭").font(.caption).foregroundStyle(.secondary)
             }.frame(maxWidth: 760).padding(24).background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 22)).padding(20)
         }.transition(.opacity)
     }
@@ -545,6 +574,8 @@ struct ContentView: View {
         case .previousTab: switchTab(-1)
         case .nextTab: switchTab(1)
         case .refresh: Task { await loadCurrentTab(); showToast("已刷新\(selectedTab.title)") }
+        case .playPause:
+            if selectedTab == .recommended { searchFocused.toggle(); showToast(searchFocused ? "已切换到搜索栏" : "已返回视频列表") }
         case .left, .stickLeft: focusedIndex = max(0, focusedIndex - 1)
         case .right, .stickRight: focusedIndex = min(max(0, count - 1), focusedIndex + 1)
         case .up, .stickUp:
@@ -687,10 +718,10 @@ struct ContentView: View {
             if keyboardCandidateFocus { candidateIndex = max(0, candidateIndex - 1) }
             else { keyboardIndex = max(0, keyboardIndex - 1) }
         case .right, .stickRight:
-            if keyboardCandidateFocus { candidateIndex = min(max(0, pinyinCandidates.prefix(8).count - 1), candidateIndex + 1) }
+            if keyboardCandidateFocus { candidateIndex = min(max(0, visiblePinyinCandidates.count - 1), candidateIndex + 1) }
             else { keyboardIndex = min(keyboardKeys.count - 1, keyboardIndex + 1) }
         case .up, .stickUp:
-            if keyboardIndex < columns && !pinyinCandidates.isEmpty { keyboardCandidateFocus = true; candidateIndex = min(candidateIndex, pinyinCandidates.prefix(8).count - 1) }
+            if keyboardIndex < columns && !visiblePinyinCandidates.isEmpty { keyboardCandidateFocus = true; candidateIndex = min(candidateIndex, visiblePinyinCandidates.count - 1) }
             else { keyboardIndex = max(0, keyboardIndex - columns) }
         case .down, .stickDown:
             if keyboardCandidateFocus { keyboardCandidateFocus = false }
@@ -700,6 +731,12 @@ struct ContentView: View {
         case .playPause: keyboardBackspace()
         case .fullscreen:
             if pinyinBuffer.isEmpty { searchText.append(" ") } else { candidateIndex = 0; commitCandidate() }
+        case .previousTab: changeCandidatePage(-1)
+        case .nextTab: changeCandidatePage(1)
+        case .toggleDanmaku:
+            if !pinyinBuffer.isEmpty { candidateIndex = 0; commitCandidate() }
+            keyboardVisible = false
+            Task { await performSearch() }
         case .back: pinyinBuffer = ""; keyboardVisible = false
         default: break
         }
@@ -715,24 +752,32 @@ struct ContentView: View {
             Task { await performSearch() }
         default:
             if key.allSatisfy(\.isNumber) { searchText.append(key) }
-            else { pinyinBuffer.append(key.lowercased()) }
+            else { pinyinBuffer.append(key.lowercased()); candidatePage = 0; candidateIndex = 0 }
         }
     }
 
     private func openKeyboard() {
-        keyboardVisible = true; keyboardIndex = 0; keyboardCandidateFocus = false; candidateIndex = 0; pinyinBuffer = ""
+        keyboardVisible = true; keyboardIndex = 0; keyboardCandidateFocus = false; candidateIndex = 0; candidatePage = 0; pinyinBuffer = ""
     }
 
     private func keyboardBackspace() {
         if !pinyinBuffer.isEmpty { pinyinBuffer.removeLast() }
         else if !searchText.isEmpty { searchText.removeLast() }
         candidateIndex = 0
+        candidatePage = 0
     }
 
     private func commitCandidate() {
         let candidates = pinyinCandidates
-        guard candidates.indices.contains(candidateIndex) else { return }
-        searchText.append(candidates[candidateIndex]); pinyinBuffer = ""; candidateIndex = 0; keyboardCandidateFocus = false
+        let absoluteIndex = candidatePage * 8 + candidateIndex
+        guard candidates.indices.contains(absoluteIndex) else { return }
+        searchText.append(candidates[absoluteIndex]); pinyinBuffer = ""; candidateIndex = 0; candidatePage = 0; keyboardCandidateFocus = false
+    }
+
+    private func changeCandidatePage(_ offset: Int) {
+        candidatePage = min(max(0, candidatePage + offset), candidatePageCount - 1)
+        candidateIndex = 0
+        keyboardCandidateFocus = !visiblePinyinCandidates.isEmpty
     }
 
     private func performSearch() async {
@@ -781,7 +826,8 @@ struct ContentView: View {
                     try await loadFavoriteFolders(); items = []
                 }
             }
-            focusedIndex = min(focusedIndex, max(0, items.count - 1))
+            let visibleCount = isBrowsingFavoriteFolders ? favoriteFolders.count : items.count
+            focusedIndex = min(focusedIndex, max(0, visibleCount - 1))
         } catch { items = []; self.error = error.localizedDescription }
         isLoading = false
     }
@@ -803,11 +849,11 @@ struct ContentView: View {
     }
 
     private func openFavoriteFolder(_ folder: FavoriteFolder) {
-        favoriteFolderOpen = folder; focusedIndex = 0
+        favoriteFolderFocus = focusedIndex; favoriteFolderOpen = folder; focusedIndex = 0
         Task { await loadFavorites() }
     }
 
-    private func closeFavoriteFolder() { favoriteFolderOpen = nil; items = []; focusedIndex = 0 }
+    private func closeFavoriteFolder() { favoriteFolderOpen = nil; items = []; focusedIndex = min(favoriteFolderFocus, max(0, favoriteFolders.count - 1)) }
 
     private func requireLogin() throws { if !session.isLoggedIn { throw LocalError.loginRequired } }
 
