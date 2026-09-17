@@ -50,3 +50,8 @@ brew install xcodegen
 xcodegen generate
 xcodebuild -project BiliPad.xcodeproj -scheme BiliPad -sdk iphoneos -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
 ```
+
+## 许可证
+
+BiliPad 采用 [Mozilla Public License 2.0](LICENSE) 开源。第三方组件与资源仍受其各自许可证约束，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
