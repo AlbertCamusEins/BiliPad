@@ -21,6 +21,7 @@ final class NativePlayerViewModel: ObservableObject {
     private(set) var finalItem: AVPlayerItem?
     private var loadedRequestID: String?
     private var timeObserver: Any?
+    private var danmakuTask: Task<Void, Never>?
 
     init() {
         player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
@@ -36,28 +37,79 @@ final class NativePlayerViewModel: ObservableObject {
 
     func load(_ request: PlaybackRequest, cookie: String) async {
         guard loadedRequestID != request.id else { return }
+        danmakuTask?.cancel()
         loadedRequestID = request.id
         isLoading = true
         currentTime = 0
         error = nil
+        danmaku = []
+        startDanmakuLoad(for: request)
+
         do {
-            async let streamRequest = BiliAPIClient().playURLs(bvid: request.bvid, cid: request.cid, cookie: cookie)
-            async let danmakuRequest = DanmakuService().load(cid: request.cid)
-            let urls = try await streamRequest
-            let headers = ["User-Agent": BiliAPIClient.userAgent, "Referer": "https://www.bilibili.com/video/\(request.bvid)", "Cookie": cookie]
+            let playURLStart = Date()
+            let segments = try await BiliAPIClient().playURLs(bvid: request.bvid, cid: request.cid, cookie: cookie)
+            print(String(format: "[BiliPad Player] playurl: %.2fs", Date().timeIntervalSince(playURLStart)))
+            guard loadedRequestID == request.id, !Task.isCancelled else { return }
+
+            var headers = [
+                "User-Agent": BiliAPIClient.userAgent,
+                "Referer": "https://www.bilibili.com/video/\(request.bvid)"
+            ]
+            if !cookie.isEmpty { headers["Cookie"] = cookie }
+
+            guard let firstSegment = segments.first,
+                  let selectedFirstURL = await MediaCDNSelector().select(candidates: firstSegment.candidates, headers: headers) else {
+                throw BiliError.noPlayableStream
+            }
+            guard loadedRequestID == request.id, !Task.isCancelled else { return }
+
+            let selectedHost = selectedFirstURL.host
+            let urls = [selectedFirstURL] + segments.dropFirst().compactMap { segment in
+                if let selectedHost,
+                   let matching = segment.candidates.first(where: { $0.host == selectedHost }) {
+                    return matching
+                }
+                return segment.candidates.first
+            }
             let playerItems = urls.map { AVPlayerItem(asset: AVURLAsset(url: $0, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])) }
             finalItem = playerItems.last
             player.removeAllItems()
             for item in playerItems { player.insert(item, after: nil) }
-            danmaku = (try? await danmakuRequest) ?? []
             player.volume = volume
+            print("[BiliPad Player] AVPlayer created")
             player.play()
+            print("[BiliPad Player] play() called")
             isPlaying = true
+            isLoading = false
         } catch {
+            guard loadedRequestID == request.id else { return }
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled {
+                danmakuTask?.cancel()
+                danmakuTask = nil
+                loadedRequestID = nil
+                isLoading = false
+                return
+            }
             loadedRequestID = nil
             self.error = error.localizedDescription
+            isLoading = false
         }
-        isLoading = false
+    }
+
+    private func startDanmakuLoad(for request: PlaybackRequest) {
+        let requestID = request.id
+        danmakuTask = Task { [weak self] in
+            do {
+                let items = try await DanmakuService().load(cid: request.cid)
+                guard !Task.isCancelled, let self, self.loadedRequestID == requestID else { return }
+                self.danmaku = items
+                print("[BiliPad Danmaku] loaded \(items.count) items")
+            } catch {
+                guard !Task.isCancelled, let self, self.loadedRequestID == requestID else { return }
+                self.danmaku = []
+                print("[BiliPad Danmaku] load failed")
+            }
+        }
     }
 
     func perform(_ command: PlayerCommand) {
@@ -77,8 +129,9 @@ final class NativePlayerViewModel: ObservableObject {
     }
 
     func reset() {
+        danmakuTask?.cancel(); danmakuTask = nil
         player.pause(); player.removeAllItems(); loadedRequestID = nil; finalItem = nil
-        currentTime = 0; isPlaying = false; danmaku = []
+        currentTime = 0; isPlaying = false; isLoading = false; danmaku = []
     }
 }
 

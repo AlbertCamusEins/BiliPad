@@ -134,6 +134,10 @@ struct PlaySegment: Decodable, Sendable {
     }
 }
 
+struct PlaySegmentURLs: Sendable {
+    let candidates: [URL]
+}
+
 struct NavData: Decodable, Sendable {
     let isLogin: Bool
     let uname: String?

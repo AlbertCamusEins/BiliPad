@@ -21,7 +21,7 @@ struct BiliAPIClient: Sendable {
         try await get("/x/web-interface/view", query: ["bvid": bvid], cookie: cookie)
     }
 
-    func playURLs(bvid: String, cid: Int64, cookie: String) async throws -> [URL] {
+    func playURLs(bvid: String, cid: Int64, cookie: String) async throws -> [PlaySegmentURLs] {
         var lastError: Error = BiliError.noPlayableStream
         for quality in ["64", "32", "16"] {
             do {
@@ -29,10 +29,16 @@ struct BiliAPIClient: Sendable {
                     "bvid": bvid, "cid": "\(cid)", "qn": quality, "fnval": "1",
                     "fnver": "0", "fourk": "0", "platform": "html5", "high_quality": "1"
                 ], cookie: cookie, referer: "https://www.bilibili.com/video/\(bvid)")
-                let urls = (value.durl ?? []).compactMap { segment in
-                    ([segment.url] + (segment.backupURL ?? [])).compactMap(URL.init(string:)).first
+                let rawSegments = value.durl ?? []
+                let segments = rawSegments.compactMap { segment -> PlaySegmentURLs? in
+                    var seen = Set<URL>()
+                    let candidates = ([segment.url] + (segment.backupURL ?? []))
+                        .compactMap(URL.init(string:))
+                        .filter { seen.insert($0).inserted }
+                    guard !candidates.isEmpty else { return nil }
+                    return PlaySegmentURLs(candidates: candidates)
                 }
-                if !urls.isEmpty { return urls }
+                if !segments.isEmpty, segments.count == rawSegments.count { return segments }
             } catch { lastError = error }
         }
         throw lastError
