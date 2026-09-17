@@ -47,6 +47,19 @@ struct BiliAPIClient: Sendable {
         return value.list.compactMap(\.video)
     }
 
+    func reportPlayback(aid: Int64, cid: Int64, progress: Int, cookie: String, csrf: String) async throws {
+        try await post(
+            "/x/v2/history/report",
+            form: [
+                "aid": "\(aid)",
+                "cid": "\(cid)",
+                "progress": "\(max(1, progress))",
+                "csrf": csrf
+            ],
+            cookie: cookie
+        )
+    }
+
     func favoriteFolders(userID: Int64, cookie: String, resourceID: Int64? = nil) async throws -> [FavoriteFolder] {
         var query = ["up_mid": "\(userID)"]
         if let resourceID { query["rid"] = "\(resourceID)"; query["type"] = "2" }

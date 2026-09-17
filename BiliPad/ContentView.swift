@@ -28,6 +28,7 @@ struct ContentView: View {
     @State private var playerFullscreen = false
     @State private var playerCommand: PlayerCommand?
     @State private var playerCommandID = 0
+    @State private var lastReportedPlaybackID: String?
     @State private var showsLogin = false
     @State private var showsSettings = false
     @State private var toast: String?
@@ -68,6 +69,7 @@ struct ContentView: View {
         Array(pinyinCandidates.dropFirst(candidatePage * 8).prefix(8))
     }
     private var candidatePageCount: Int { max(1, (pinyinCandidates.count + 7) / 8) }
+    private var settingsRowCount: Int { 5 + MappableControllerAction.allCases.count }
 
     init() {
         let bindings = ControllerBindings()
@@ -311,7 +313,9 @@ struct ContentView: View {
                     }
                 }.frame(maxWidth: 980).padding(26)
             }
-        }.transition(.opacity)
+        }
+        .overlay(alignment: .topLeading) { touchBackButton { detail = nil } }
+        .transition(.opacity)
     }
 
     private func detailAction(_ title: String, _ icon: String) -> some View {
@@ -323,7 +327,7 @@ struct ContentView: View {
             ZStack {
                 Color(red: 0.035, green: 0.037, blue: 0.05).ignoresSafeArea()
                 if playerFullscreen {
-                    NativePlayerView(request: request, cookie: session.cookieHeader, command: playerCommand, commandID: playerCommandID, danmakuEnabled: danmakuEnabled, onEnded: advanceAutoplay, model: playerModel)
+                    NativePlayerView(request: request, cookie: session.cookieHeader, command: playerCommand, commandID: playerCommandID, danmakuEnabled: danmakuEnabled, onToggleDanmaku: toggleDanmaku, onPlaybackStarted: reportPlaybackHistory, onEnded: advanceAutoplay, model: playerModel)
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
                         .ignoresSafeArea()
@@ -334,7 +338,7 @@ struct ContentView: View {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 16) {
                             HStack(alignment: .top, spacing: 14) {
-                                NativePlayerView(request: request, cookie: session.cookieHeader, command: playerCommand, commandID: playerCommandID, danmakuEnabled: danmakuEnabled, onEnded: advanceAutoplay, model: playerModel)
+                                NativePlayerView(request: request, cookie: session.cookieHeader, command: playerCommand, commandID: playerCommandID, danmakuEnabled: danmakuEnabled, onToggleDanmaku: toggleDanmaku, onPlaybackStarted: reportPlaybackHistory, onEnded: advanceAutoplay, model: playerModel)
                                     .frame(width: videoWidth, height: videoWidth * 9.0 / 16.0)
                                     .clipShape(RoundedRectangle(cornerRadius: 10))
                                     .overlay { RoundedRectangle(cornerRadius: 10).stroke(detailFocusZone == 0 ? Color.pink : .clear, lineWidth: 3) }
@@ -364,7 +368,10 @@ struct ContentView: View {
                     }
                 }
             }
-        }.ignoresSafeArea(playerFullscreen ? .all : []).transition(.opacity)
+        }
+        .overlay(alignment: .topLeading) { touchBackButton(action: closePlayerOrFullscreen) }
+        .ignoresSafeArea(playerFullscreen ? .all : [])
+        .transition(.opacity)
     }
 
     private var sidePanel: some View {
@@ -453,9 +460,11 @@ struct ContentView: View {
                         ForEach(Array(MappableControllerAction.allCases.enumerated()), id: \.element.id) { offset, action in
                             settingsRow(index: offset + 5, title: action.title, detail: bindings.button(for: action).title, icon: "gamecontroller")
                         }
-                    }.frame(maxWidth: 820).padding(28)
+                    }.frame(maxWidth: 820).padding(28).scrollTargetLayout()
                 }
-                .onChange(of: settingsFocus) { _, value in withAnimation(.easeOut(duration: 0.16)) { proxy.scrollTo("setting-\(value)", anchor: .center) } }
+                .onChange(of: settingsFocus) { _, value in
+                    withAnimation(.easeOut(duration: 0.16)) { proxy.scrollTo(value, anchor: .center) }
+                }
             }
             if let target = remapTarget {
                 VStack(spacing: 14) {
@@ -465,7 +474,9 @@ struct ContentView: View {
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
                 }.padding(30).background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 22)).shadow(radius: 30)
             }
-        }.transition(.opacity)
+        }
+        .overlay(alignment: .topLeading) { touchBackButton { closeSettings() } }
+        .transition(.opacity)
     }
 
     private func settingsRow(index: Int, title: String, detail: String?, icon: String) -> some View {
@@ -479,7 +490,7 @@ struct ContentView: View {
         .padding(15)
         .background(index == settingsFocus ? Color.pink.opacity(0.22) : Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
         .overlay { RoundedRectangle(cornerRadius: 12).stroke(index == settingsFocus ? Color.pink : .clear, lineWidth: 2) }
-        .id("setting-\(index)")
+        .id(index)
         .onTapGesture { settingsFocus = index; activateSetting() }
     }
 
@@ -493,7 +504,7 @@ struct ContentView: View {
         .padding(15)
         .background(index == settingsFocus ? Color.pink.opacity(0.22) : Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
         .overlay { RoundedRectangle(cornerRadius: 12).stroke(index == settingsFocus ? Color.pink : .clear, lineWidth: 2) }
-        .id("setting-\(index)")
+        .id(index)
         .onTapGesture { settingsFocus = index; activateSetting() }
     }
 
@@ -611,19 +622,18 @@ struct ContentView: View {
     private func handlePlayback(_ action: ControllerAction) {
         switch action {
         case .confirm:
-            if playerFullscreen || detailFocusZone == 0 { sendPlayer(.togglePlayback) }
+            if playerFullscreen || detailFocusZone == 0 { sendPlayer(.toggleChrome) }
             else if detailFocusZone == 1 { activateSideItem() }
             else if detailFocusZone == 2 { performFocusedInteraction() }
         case .back:
-            if playerFullscreen { playerFullscreen = false }
-            else { playerModel.reset(); playback = nil; detail = nil; relatedVideos = []; replies = [] }
+            closePlayerOrFullscreen()
         case .playPause: sendPlayer(.togglePlayback)
         case .fullscreen: playerFullscreen.toggle(); showToast(playerFullscreen ? "全屏" : "窗口模式")
         case .interaction: performLTInteraction()
         case .tripleInteraction:
             if ltFavorites { performLTInteraction(); showToast("LT 收藏模式：长按仍执行收藏") }
             else { performTriple() }
-        case .toggleDanmaku: danmakuEnabled.toggle(); showToast(danmakuEnabled ? "弹幕已开启" : "弹幕已关闭")
+        case .toggleDanmaku: toggleDanmaku()
         case .up, .stickUp:
             if playerFullscreen { sendPlayer(.volume(0.08)); showToast("音量 +") }
             else if detailFocusZone == 1 {
@@ -669,9 +679,9 @@ struct ContentView: View {
     private func handleSettings(_ action: ControllerAction) {
         switch action {
         case .up, .left, .stickUp, .stickLeft: settingsFocus = max(0, settingsFocus - 1)
-        case .down, .right, .stickDown, .stickRight: settingsFocus = min(15, settingsFocus + 1)
+        case .down, .right, .stickDown, .stickRight: settingsFocus = min(settingsRowCount - 1, settingsFocus + 1)
         case .confirm: activateSetting()
-        case .back, .menu: controller.cancelCapture(); remapTarget = nil; showsSettings = false
+        case .back, .menu: closeSettings()
         default: break
         }
     }
@@ -689,7 +699,7 @@ struct ContentView: View {
             session.signOut(); selectedTab = .recommended; favoriteFolders = []; favoriteFolderOpen = nil; showToast("已退出本地登录")
         case 4:
             bindings.reset(); showToast("已恢复默认按键")
-        case 5...15:
+        case 5..<(5 + MappableControllerAction.allCases.count):
             let action = MappableControllerAction.allCases[settingsFocus - 5]
             remapTarget = action
             controller.captureNextButton { button in
@@ -944,8 +954,49 @@ struct ContentView: View {
         }
     }
 
-    private func play(_ detail: VideoDetail, page: VideoPage) { playback = PlaybackRequest(title: detail.title, bvid: detail.bvid, cid: page.cid); playerFullscreen = false }
+    private func play(_ detail: VideoDetail, page: VideoPage) { lastReportedPlaybackID = nil; playback = PlaybackRequest(title: detail.title, bvid: detail.bvid, cid: page.cid); playerFullscreen = false }
     private func sendPlayer(_ command: PlayerCommand) { playerCommand = command; playerCommandID += 1 }
+
+    private func toggleDanmaku() {
+        danmakuEnabled.toggle()
+        showToast(danmakuEnabled ? "弹幕已开启" : "弹幕已关闭")
+    }
+
+    private func reportPlaybackHistory() {
+        guard session.isLoggedIn, let detail, let csrf = session.csrfToken, let playback else { return }
+        guard lastReportedPlaybackID != playback.id else { return }
+        lastReportedPlaybackID = playback.id
+        Task {
+            try? await BiliAPIClient().reportPlayback(aid: detail.aid, cid: playback.cid, progress: Int(playerModel.currentTime), cookie: session.cookieHeader, csrf: csrf)
+        }
+    }
+
+    private func closePlayerOrFullscreen() {
+        if playerFullscreen { playerFullscreen = false; return }
+        playerModel.reset()
+        playback = nil
+        detail = nil
+        relatedVideos = []
+        replies = []
+    }
+
+    private func closeSettings() {
+        controller.cancelCapture()
+        remapTarget = nil
+        showsSettings = false
+    }
+
+    private func touchBackButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "chevron.left")
+                .font(.headline.bold())
+                .frame(width: 42, height: 42)
+                .background(.black.opacity(0.6), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("返回")
+        .padding(16)
+    }
 
     private func showToast(_ message: String) {
         toast = message

@@ -4,6 +4,7 @@ import UIKit
 
 enum PlayerCommand: Equatable {
     case togglePlayback
+    case toggleChrome
     case volume(Float)
     case seek(Double)
 }
@@ -64,6 +65,8 @@ final class NativePlayerViewModel: ObservableObject {
         case .togglePlayback:
             if player.timeControlStatus == .playing { player.pause(); isPlaying = false }
             else { player.play(); isPlaying = true }
+        case .toggleChrome:
+            break
         case let .volume(delta):
             volume = min(1, max(0, volume + delta)); player.volume = volume
         case let .seek(offset):
@@ -85,9 +88,12 @@ struct NativePlayerView: View {
     let command: PlayerCommand?
     let commandID: Int
     let danmakuEnabled: Bool
+    let onToggleDanmaku: () -> Void
+    let onPlaybackStarted: () -> Void
     let onEnded: () -> Void
     @ObservedObject var model: NativePlayerViewModel
     @State private var showsChrome = true
+    @State private var chromeActivityID = UUID()
 
     var body: some View {
         ZStack {
@@ -101,6 +107,17 @@ struct NativePlayerView: View {
                     HStack {
                         Text(request.title).font(.headline).lineLimit(1)
                         Spacer()
+                        Button {
+                            onToggleDanmaku()
+                            revealChrome()
+                        } label: {
+                            Label(danmakuEnabled ? "弹幕开" : "弹幕关", systemImage: danmakuEnabled ? "text.bubble.fill" : "text.bubble")
+                                .font(.caption.bold())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(.black.opacity(0.45), in: Capsule())
                         Image(systemName: "gamecontroller.fill")
                     }.padding()
                     Spacer()
@@ -128,10 +145,31 @@ struct NativePlayerView: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture { showsChrome.toggle() }
-        .task(id: request.id) { await model.load(request, cookie: cookie) }
+        .onTapGesture { toggleChrome() }
+        .task(id: request.id) {
+            await model.load(request, cookie: cookie)
+            revealChrome()
+        }
+        .task(id: chromeActivityID) {
+            guard showsChrome, model.isPlaying else { return }
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled, model.isPlaying else { return }
+            withAnimation(.easeOut(duration: 0.2)) { showsChrome = false }
+        }
         .onChange(of: commandID) { _, _ in
-            if let command { model.perform(command); showsChrome = true }
+            guard let command else { return }
+            if command == .toggleChrome { toggleChrome() }
+            else { model.perform(command); revealChrome() }
+        }
+        .onChange(of: model.isPlaying) { _, playing in
+            if playing { revealChrome() }
+            else {
+                chromeActivityID = UUID()
+                withAnimation(.easeOut(duration: 0.16)) { showsChrome = true }
+            }
+        }
+        .onChange(of: model.currentTime) { _, currentTime in
+            if currentTime >= 0.5 { onPlaybackStarted() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
             guard let ended = notification.object as? AVPlayerItem, ended === model.finalItem else { return }
@@ -160,6 +198,20 @@ struct NativePlayerView: View {
         let bits = model.player.currentItem?.accessLog()?.events.last?.observedBitrate ?? 0
         guard bits > 0 else { return "0 KB/s" }
         return String(format: "%.0f KB/s", bits / 8 / 1024)
+    }
+
+    private func revealChrome() {
+        withAnimation(.easeOut(duration: 0.16)) { showsChrome = true }
+        chromeActivityID = UUID()
+    }
+
+    private func toggleChrome() {
+        if showsChrome {
+            chromeActivityID = UUID()
+            withAnimation(.easeOut(duration: 0.16)) { showsChrome = false }
+        } else {
+            revealChrome()
+        }
     }
 
     private func format(_ value: Double) -> String {
