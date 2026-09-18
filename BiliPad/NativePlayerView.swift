@@ -22,11 +22,18 @@ final class NativePlayerViewModel: ObservableObject {
     private var loadedRequestID: String?
     private var timeObserver: Any?
     private var danmakuTask: Task<Void, Never>?
+    private var timeControlObservation: NSKeyValueObservation?
+    private var currentItemObservation: NSKeyValueObservation?
+    private var itemObservations: [NSKeyValueObservation] = []
+    private var startupStart: Date?
+    private var playCommandStart: Date?
 
     init() {
         player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
+        player.automaticallyWaitsToMinimizeStalling = false
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [])
         try? AVAudioSession.sharedInstance().setActive(true)
+        installPlayerObservers()
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600), queue: .main) { [weak self] time in
             Task { @MainActor [weak self] in
                 self?.currentTime = time.seconds.isFinite ? time.seconds : 0
@@ -40,6 +47,8 @@ final class NativePlayerViewModel: ObservableObject {
         danmakuTask?.cancel()
         loadedRequestID = request.id
         isLoading = true
+        startupStart = Date()
+        playCommandStart = nil
         currentTime = 0
         error = nil
         danmaku = []
@@ -48,7 +57,8 @@ final class NativePlayerViewModel: ObservableObject {
         do {
             let playURLStart = Date()
             let segments = try await BiliAPIClient().playURLs(bvid: request.bvid, cid: request.cid, cookie: cookie)
-            print(String(format: "[BiliPad Player] playurl: %.2fs", Date().timeIntervalSince(playURLStart)))
+            let playURLDuration = Date().timeIntervalSince(playURLStart)
+            print(String(format: "[BiliPad Startup] playurl %.2fs", playURLDuration))
             guard loadedRequestID == request.id, !Task.isCancelled else { return }
 
             var headers = [
@@ -57,12 +67,15 @@ final class NativePlayerViewModel: ObservableObject {
             ]
             if !cookie.isEmpty { headers["Cookie"] = cookie }
 
+            let cdnSelectionStart = Date()
             guard let firstSegment = segments.first,
                   let selectedFirstURL = await MediaCDNSelector().select(candidates: firstSegment.candidates, headers: headers) else {
                 throw BiliError.noPlayableStream
             }
+            print(String(format: "[BiliPad Startup] CDN selection %.2fs", Date().timeIntervalSince(cdnSelectionStart)))
             guard loadedRequestID == request.id, !Task.isCancelled else { return }
 
+            let playerSetupStart = Date()
             let selectedHost = selectedFirstURL.host
             let urls = [selectedFirstURL] + segments.dropFirst().compactMap { segment in
                 if let selectedHost,
@@ -71,15 +84,19 @@ final class NativePlayerViewModel: ObservableObject {
                 }
                 return segment.candidates.first
             }
-            let playerItems = urls.map { AVPlayerItem(asset: AVURLAsset(url: $0, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])) }
+            let playerItems = urls.map { url in
+                let item = AVPlayerItem(asset: AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers]))
+                item.preferredForwardBufferDuration = 3
+                return item
+            }
             finalItem = playerItems.last
             player.removeAllItems()
             for item in playerItems { player.insert(item, after: nil) }
             player.volume = volume
-            print("[BiliPad Player] AVPlayer created")
-            player.play()
-            print("[BiliPad Player] play() called")
-            isPlaying = true
+            print(String(format: "[BiliPad Startup] player setup %.2fs", Date().timeIntervalSince(playerSetupStart)))
+            playCommandStart = Date()
+            player.playImmediately(atRate: 1.0)
+            print("[BiliPad Player] playImmediately called")
             isLoading = false
         } catch {
             guard loadedRequestID == request.id else { return }
@@ -112,11 +129,88 @@ final class NativePlayerViewModel: ObservableObject {
         }
     }
 
+    private func installPlayerObservers() {
+        timeControlObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] _, _ in
+            Task { @MainActor [weak self] in
+                self?.handlePlayerState()
+            }
+        }
+        currentItemObservation = player.observe(\.currentItem, options: [.initial, .new]) { [weak self] _, _ in
+            Task { @MainActor [weak self] in
+                self?.observeCurrentItem(self?.player.currentItem)
+            }
+        }
+    }
+
+    private func observeCurrentItem(_ item: AVPlayerItem?) {
+        itemObservations.removeAll()
+        guard let item else { return }
+
+        let status = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
+            Task { @MainActor [weak self] in self?.logPlayerState(item: self?.player.currentItem) }
+        }
+        let likelyToKeepUp = item.observe(\.isPlaybackLikelyToKeepUp, options: [.initial, .new]) { [weak self] item, _ in
+            Task { @MainActor [weak self] in self?.logPlayerState(item: self?.player.currentItem) }
+        }
+        let bufferEmpty = item.observe(\.isPlaybackBufferEmpty, options: [.initial, .new]) { [weak self] item, _ in
+            Task { @MainActor [weak self] in self?.logPlayerState(item: self?.player.currentItem) }
+        }
+        let bufferFull = item.observe(\.isPlaybackBufferFull, options: [.initial, .new]) { [weak self] item, _ in
+            Task { @MainActor [weak self] in self?.logPlayerState(item: self?.player.currentItem) }
+        }
+        itemObservations = [status, likelyToKeepUp, bufferEmpty, bufferFull]
+    }
+
+    private func handlePlayerState() {
+        isPlaying = player.timeControlStatus == .playing
+        logPlayerState(item: player.currentItem)
+
+        guard player.timeControlStatus == .playing,
+              let playCommandStart else { return }
+
+        let playToPlaying = Date().timeIntervalSince(playCommandStart)
+        print(String(format: "[BiliPad Startup] play -> playing %.2fs", playToPlaying))
+        if let startupStart {
+            print(String(format: "[BiliPad Startup] total %.2fs", Date().timeIntervalSince(startupStart)))
+        }
+        self.playCommandStart = nil
+    }
+
+    private func logPlayerState(item: AVPlayerItem?) {
+        let timeControlStatus: String
+        switch player.timeControlStatus {
+        case .paused: timeControlStatus = "paused"
+        case .waitingToPlayAtSpecifiedRate: timeControlStatus = "waiting"
+        case .playing: timeControlStatus = "playing"
+        @unknown default: timeControlStatus = "unknown"
+        }
+
+        let itemStatus: String
+        if let item {
+            switch item.status {
+            case .unknown: itemStatus = "unknown"
+            case .readyToPlay: itemStatus = "readyToPlay"
+            case .failed: itemStatus = "failed"
+            @unknown default: itemStatus = "unknown"
+            }
+        } else {
+            itemStatus = "none"
+        }
+
+        print(
+            "[BiliPad Player] status=\(timeControlStatus) " +
+            "reason=\(player.reasonForWaitingToPlay?.rawValue ?? "none") " +
+            "itemStatus=\(itemStatus) " +
+            "likelyToKeepUp=\(item?.isPlaybackLikelyToKeepUp ?? false) " +
+            "bufferEmpty=\(item?.isPlaybackBufferEmpty ?? false) " +
+            "bufferFull=\(item?.isPlaybackBufferFull ?? false)"
+        )
+    }
     func perform(_ command: PlayerCommand) {
         switch command {
         case .togglePlayback:
-            if player.timeControlStatus == .playing { player.pause(); isPlaying = false }
-            else { player.play(); isPlaying = true }
+            if player.timeControlStatus == .playing { player.pause() }
+            else { player.play() }
         case .toggleChrome:
             break
         case let .volume(delta):
@@ -131,6 +225,7 @@ final class NativePlayerViewModel: ObservableObject {
     func reset() {
         danmakuTask?.cancel(); danmakuTask = nil
         player.pause(); player.removeAllItems(); loadedRequestID = nil; finalItem = nil
+        itemObservations.removeAll(); startupStart = nil; playCommandStart = nil
         currentTime = 0; isPlaying = false; isLoading = false; danmaku = []
     }
 }
